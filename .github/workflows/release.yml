@@ -1,0 +1,82 @@
+name: Build & Release IPA
+
+# Two roles in one workflow:
+#  - pull_request: compile check, so Swift errors surface before merge
+#  - push to main (i.e. every merged PR): build + publish a GitHub release
+#    with the unsigned IPA attached
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # No signing in CI: a free Apple account can't mint distribution
+      # certificates, and sideloading tools (AltStore/SideStore/Sideloadly)
+      # re-sign the IPA with the installer's own Apple ID anyway.
+      - name: Build (unsigned, Release, device slice)
+        run: |
+          xcodebuild \
+            -project HIIT.xcodeproj \
+            -scheme HIIT \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/HIIT.app"
+          test -d "$APP_PATH"
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry HIIT-unsigned.ipa Payload
+
+      - name: Upload IPA as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HIIT-unsigned-ipa
+          path: HIIT-unsigned.ipa
+
+      - name: Create GitHub release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9][0-9.]*\);.*/\1/p' HIIT.xcodeproj/project.pbxproj | head -1)
+          TAG="v${VERSION:-1.0}.${{ github.run_number }}"
+          cat > release-notes.md <<'NOTES'
+          Unsigned iOS build, packaged automatically from the latest merge to `main`.
+
+          **Install (sideload):**
+          - **AltStore / SideStore** — add this IPA; it is re-signed with your Apple ID automatically.
+          - **Sideloadly** — drag the IPA in and sign with your Apple ID.
+          - Or clone the repo and run from Xcode (most reliable, and the fallback if Health permissions don't appear after sideloading).
+
+          Free Apple IDs: sideloaded apps expire after 7 days — reinstall to refresh. Requires iOS 17+.
+          NOTES
+          gh release create "$TAG" HIIT-unsigned.ipa \
+            --title "HIIT Coach $TAG" \
+            --target "${{ github.sha }}" \
+            --notes-file release-notes.md \
+            --latest
