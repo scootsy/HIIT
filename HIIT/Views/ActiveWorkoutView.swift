@@ -24,6 +24,7 @@ struct ActiveWorkoutContainerView: View {
             engine.soundOn = settings.value.soundOn
             engine.hapticsOn = settings.value.hapticsOn
             engine.maxHR = settings.maxHR
+            engine.machine = settings.machine(for: engine.plan.equipment)
             engine.start()
             health.startHeartRateUpdates()
         }
@@ -59,10 +60,7 @@ struct ActiveWorkoutView: View {
                 topBar
                 Spacer(minLength: 4)
                 ring
-                Text(targetLine(for: engine.currentPhase.target, equipment: engine.plan.equipment, settings: settings))
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
+                targetRow
                 Spacer(minLength: 4)
                 nextUp
                 hrCard
@@ -132,6 +130,54 @@ struct ActiveWorkoutView: View {
         .aspectRatio(1, contentMode: .fit)
     }
 
+    /// The live target, with ± to say "I'm actually going faster/slower than
+    /// that" — the change sticks for every remaining phase of the same kind
+    /// and flows into distance, calories, and next-session targets.
+    private var targetRow: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 18) {
+                if adjustable {
+                    Button {
+                        engine.adjustCurrentTarget(up: false)
+                    } label: {
+                        Image(systemName: "minus")
+                            .font(.headline)
+                            .frame(width: 40, height: 40)
+                            .background(.white.opacity(0.1), in: Circle())
+                            .foregroundStyle(.white)
+                    }
+                }
+                Text(targetLine(for: engine.currentTarget, equipment: engine.plan.equipment, settings: settings))
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                if adjustable {
+                    Button {
+                        engine.adjustCurrentTarget(up: true)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.headline)
+                            .frame(width: 40, height: 40)
+                            .background(.white.opacity(0.1), in: Circle())
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            if engine.currentTargetAdjusted {
+                Text("adjusted — plan was \(targetLine(for: engine.currentPhase.target, equipment: engine.plan.equipment, settings: settings))")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+        }
+    }
+
+    private var adjustable: Bool {
+        if engine.plan.equipment == .bike {
+            return engine.currentTarget.resistance != nil
+        }
+        return engine.currentTarget.speedMph != nil
+    }
+
     private var nextUp: some View {
         Group {
             if let next = engine.nextPhase {
@@ -139,7 +185,7 @@ struct ActiveWorkoutView: View {
                     Image(systemName: "arrow.right.circle.fill")
                         .foregroundStyle(engine.isWarning ? Theme.steady : .white.opacity(0.6))
                         .symbolEffect(.pulse, isActive: engine.isWarning)
-                    Text("Next: \(next.kind.title.lowercased()) · \(targetLine(for: next.target, equipment: engine.plan.equipment, settings: settings))")
+                    Text("Next: \(next.kind.title.lowercased()) · \(targetLine(for: engine.nextTarget ?? next.target, equipment: engine.plan.equipment, settings: settings))")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.white.opacity(0.9))
                         .lineLimit(1)

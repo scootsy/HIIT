@@ -21,11 +21,11 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 | Hill climbs | Low-impact incline work | Treadmills with incline |
 | Cadence surges | Leg-speed work | Bike |
 
-**It guides you through it.** A full-screen, phase-colored timer with a big countdown ring, the exact speed/incline or resistance/cadence to hit, haptic + sound cues, and — the detail that matters on a treadmill — an **amber early warning before every change**, sized to your machine's lag, so you can press the buttons before the interval starts. If live heart rate is available (Apple Watch workout or a chest strap), it nudges you in real time when you're above or below the target zone.
+**It guides you through it.** A full-screen, phase-colored timer with a big countdown ring, the exact speed/incline or resistance/cadence to hit, haptic + sound cues, and — the detail that matters on a treadmill — an **amber early warning before every change**, sized to your machine's lag, so you can press the buttons before the interval starts. If live heart rate is available (Apple Watch workout or a chest strap), it nudges you in real time when you're above or below the target zone. Feeling better than the plan? Tap **±** on the live target ("it said 5.0 but I'm running 5.5") — the change applies to the rest of the session, the calorie/distance math follows what you actually did, and the next session starts where you actually trained.
 
 **It learns.** After each session you rate the effort (RPE 1–10). Finish everything comfortably and next session's targets step up; a maximal or unfinished session holds or steps back; heart-rate data can veto increases after sessions that ran too hot. Every ~6th hard session is deliberately lighter — a recovery week you don't have to remember to schedule.
 
-**It remembers.** History with per-phase breakdowns, a weekly-minutes trend chart, and automatic export of every workout (duration, estimated calories, distance) to Apple Health.
+**It remembers.** History with per-phase breakdowns, a weekly-minutes trend chart, and automatic export of every workout (duration, estimated calories, distance) to Apple Health. It also tracks the fitness signals a coach would actually watch: **Cardio Fitness (VO₂max)** and **resting heart rate** trends pulled from Health, plus **1-minute heart-rate recovery** measured automatically after your last hard interval whenever live HR is available.
 
 **Optional AI coach.** Add your own Anthropic API key in Settings and get short, concrete feedback on your recent training after any workout. The key is stored in the device Keychain and requests go directly from your phone to Anthropic — no middleman.
 
@@ -47,6 +47,10 @@ Notes for free accounts: apps expire after 7 days (re-run from Xcode to refresh)
 ## Live heart rate — what to expect
 
 iPhone apps can't produce heart-rate data themselves. The app reads the most recent samples written to HealthKit, which stream in near-real-time when an Apple Watch has a workout running (start any workout on the Watch) or when a Bluetooth chest strap is paired through a companion app that writes to Health. Without a source, everything still works — you just train by the speed/resistance targets and RPE instead of live bpm.
+
+## Sideloading and the Health permission sheet
+
+The HealthKit permission sheet can only appear if the installed app carries the `com.apple.developer.healthkit` entitlement. Xcode installs always do. Sideloaded IPAs depend on the re-signing tool: the CI-built IPA ships ad-hoc-signed with the entitlement embedded so AltStore/SideStore/Sideloadly can carry it over, but if your tool strips it, iOS silently refuses the authorization request — the app detects this and tells you, and reinstalling via Xcode fixes it.
 
 ## Project layout
 

@@ -18,6 +18,7 @@ final class WorkoutSession {
     var estimatedDistanceMeters: Double = 0
     var avgHeartRate: Double?
     var maxHeartRate: Double?
+    var hrRecovery: Double?
     var rpe: Int?
     var notes: String = ""
     var nextTimeNote: String = ""
@@ -40,6 +41,7 @@ final class WorkoutSession {
         self.estimatedDistanceMeters = result.estimatedDistanceMeters
         self.avgHeartRate = result.avgHeartRate
         self.maxHeartRate = result.maxHeartRate
+        self.hrRecovery = result.hrRecovery
         self.phasesData = (try? JSONEncoder().encode(result.records)) ?? Data()
     }
 

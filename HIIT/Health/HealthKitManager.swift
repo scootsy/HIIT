@@ -4,7 +4,8 @@ import Observation
 
 /// All Apple Health integration: authorization, pulling a profile snapshot
 /// (age / weight / height / resting HR) to personalize workouts, streaming
-/// live heart-rate samples during a session, and saving finished workouts back.
+/// live heart-rate samples during a session, reading long-term fitness signals
+/// (VO₂max, resting-HR trend), and saving finished workouts back.
 ///
 /// Live heart rate requires a source that writes to Health in near-real-time —
 /// in practice an Apple Watch with a workout running, or a paired chest strap.
@@ -24,6 +25,12 @@ final class HealthKitManager {
     var liveHeartRate: Double? = nil
     var liveHeartRateDate: Date? = nil
 
+    static let vo2MaxUnit = HKUnit.literUnit(with: .milli)
+        .unitDivided(by: HKUnit.gramUnit(with: .kilo))
+        .unitDivided(by: .minute())
+
+    static let bpmUnit = HKUnit.count().unitDivided(by: .minute())
+
     private let store = HKHealthStore()
     private var hrQuery: HKAnchoredObjectQuery? = nil
 
@@ -33,11 +40,17 @@ final class HealthKitManager {
 
     // MARK: - Authorization
 
-    func requestAuthorization() async -> Bool {
-        guard Self.isAvailable else { return false }
+    /// Returns nil on success, or a user-facing explanation of why the
+    /// permission sheet could not be shown. The most common failure is a
+    /// re-signed sideloaded build whose HealthKit entitlement was stripped —
+    /// iOS then rejects the request without ever presenting the sheet.
+    func requestAuthorization() async -> String? {
+        guard Self.isAvailable else {
+            return "Health data isn't available on this device."
+        }
         var share: Set<HKSampleType> = [HKObjectType.workoutType()]
         var read: Set<HKObjectType> = [HKObjectType.workoutType()]
-        let readIDs: [HKQuantityTypeIdentifier] = [.heartRate, .restingHeartRate, .bodyMass, .height, .activeEnergyBurned]
+        let readIDs: [HKQuantityTypeIdentifier] = [.heartRate, .restingHeartRate, .bodyMass, .height, .activeEnergyBurned, .vo2Max]
         for id in readIDs {
             if let type = quantityType(id) { read.insert(type) }
         }
@@ -50,9 +63,13 @@ final class HealthKitManager {
         }
         do {
             try await store.requestAuthorization(toShare: share, read: read)
-            return true
+            return nil
         } catch {
-            return false
+            let message = (error as NSError).localizedDescription
+            if message.localizedCaseInsensitiveContains("entitlement") {
+                return "This copy of the app is missing the HealthKit capability, so iOS refused to show the permission sheet. Sideloading tools sometimes strip it when re-signing — reinstall via Xcode (most reliable), or use Sideloadly with the HealthKit entitlement kept."
+            }
+            return message
         }
     }
 
@@ -70,7 +87,7 @@ final class HealthKitManager {
         if let meters = await latestQuantity(.height, unit: .meter()) {
             snapshot.heightCm = meters * 100
         }
-        snapshot.restingHR = await latestQuantity(.restingHeartRate, unit: HKUnit.count().unitDivided(by: .minute()))
+        snapshot.restingHR = await latestQuantity(.restingHeartRate, unit: Self.bpmUnit)
         return snapshot
     }
 
@@ -86,13 +103,37 @@ final class HealthKitManager {
         }
     }
 
+    // MARK: - Fitness signal series (VO₂max, resting-HR trend)
+
+    struct SamplePoint: Identifiable {
+        let id: Date
+        let value: Double
+        var date: Date { id }
+    }
+
+    func fetchSeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit, daysBack: Int) async -> [SamplePoint] {
+        guard Self.isAvailable, let type = quantityType(id) else { return [] }
+        let start = Calendar.current.date(byAdding: .day, value: -daysBack, to: Date()) ?? Date()
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: nil, options: [])
+        return await withCheckedContinuation { continuation in
+            let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+                let points = (samples ?? [])
+                    .compactMap { $0 as? HKQuantitySample }
+                    .map { SamplePoint(id: $0.endDate, value: $0.quantity.doubleValue(for: unit)) }
+                continuation.resume(returning: points)
+            }
+            store.execute(query)
+        }
+    }
+
     // MARK: - Live heart rate
 
     func startHeartRateUpdates() {
         stopHeartRateUpdates()
         guard Self.isAvailable, let type = quantityType(.heartRate) else { return }
         let predicate = HKQuery.predicateForSamples(withStart: Date().addingTimeInterval(-60), end: nil, options: [])
-        let unit = HKUnit.count().unitDivided(by: .minute())
+        let unit = Self.bpmUnit
 
         let handler: (HKAnchoredObjectQuery, [HKSample]?, [HKDeletedObject]?, HKQueryAnchor?, Error?) -> Void = { [weak self] _, samples, _, _, _ in
             let quantitySamples = samples?.compactMap { $0 as? HKQuantitySample } ?? []

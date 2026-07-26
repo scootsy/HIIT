@@ -102,6 +102,10 @@ struct SessionResult {
     var avgHeartRate: Double? = nil
     var maxHeartRate: Double? = nil
     var avgWorkHeartRate: Double? = nil
+    /// Heart-rate drop 1 minute after the last hard effort, when live HR allowed measuring it.
+    var hrRecovery: Double? = nil
+    /// Mid-workout manual overrides, expressed in progression levels (positive = user went harder than planned).
+    var workOverrideLevels: Double = 0
     var estimatedCalories: Double
     var estimatedDistanceMeters: Double
     var endedEarly: Bool
