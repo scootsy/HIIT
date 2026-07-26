@@ -12,7 +12,7 @@ enum ProgressionEngine {
         var note: String
     }
 
-    static func evaluate(currentLevel: Double, rpe: Int?, completionRatio: Double, avgWorkHRPercent: Double?) -> Update {
+    static func evaluate(currentLevel: Double, rpe: Int?, completionRatio: Double, avgWorkHRPercent: Double?, workOverrideLevels: Double = 0) -> Update {
         var level = currentLevel
         var note: String
 
@@ -36,6 +36,17 @@ enum ProgressionEngine {
         } else {
             level += 0.5
             note = "Completed in full — next session nudges up."
+        }
+
+        // Mid-workout overrides are the strongest signal we have — the user
+        // told us, mid-effort, where the targets actually belong.
+        let override = max(-2, min(2, workOverrideLevels))
+        if override > 0.2 {
+            level += override
+            note = "You ran ahead of the targets today — next session starts where you actually trained."
+        } else if override < -0.2 {
+            level = max(0, level + override)
+            note = "You dialed it back mid-session, so next time starts at the pace you actually held."
         }
 
         if let hr = avgWorkHRPercent, hr > 95, level > currentLevel {

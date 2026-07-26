@@ -15,6 +15,7 @@ struct AppSettings: Codable {
     var machines: [String: MachineProfile] = [:]
     var lastEquipmentRaw: String? = nil
     var healthConnected: Bool = false
+    var lastHealthSync: Date? = nil
 }
 
 @Observable
@@ -98,5 +99,6 @@ final class SettingsStore {
         if let height = snapshot.heightCm { value.heightCm = height }
         if let resting = snapshot.restingHR { value.restingHR = resting }
         value.healthConnected = true
+        value.lastHealthSync = Date()
     }
 }

@@ -82,6 +82,11 @@ struct SummaryView: View {
                 }
                 StatTile(title: "Max HR", value: r.maxHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
             }
+            if let recovery = r.hrRecovery {
+                StatTile(title: "Heart-rate recovery (1 min)",
+                         value: "−\(Int(recovery)) bpm",
+                         subtitle: "how fast your HR fell after the last hard effort — bigger drops track with a fitter heart")
+            }
         }
     }
 
@@ -178,7 +183,8 @@ struct SummaryView: View {
             currentLevel: progress.level,
             rpe: rpe,
             completionRatio: completion,
-            avgWorkHRPercent: hrPercent)
+            avgWorkHRPercent: hrPercent,
+            workOverrideLevels: r.workOverrideLevels)
         progress.level = update.newLevel
         progress.sessionsCompleted += 1
         progress.lastSessionDate = r.endDate

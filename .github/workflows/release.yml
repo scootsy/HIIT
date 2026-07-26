@@ -44,6 +44,18 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
+      # Ad-hoc sign so the HealthKit entitlement is embedded in the binary's
+      # signature. Without this, re-signing tools (AltStore/SideStore/
+      # Sideloadly) see no entitlements and iOS silently refuses to show the
+      # Health permission sheet after install.
+      - name: Ad-hoc sign with entitlements
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/HIIT.app"
+          codesign --force --sign - \
+            --entitlements HIIT/HIIT.entitlements \
+            "$APP_PATH"
+          codesign --display --entitlements - "$APP_PATH"
+
       - name: Package unsigned IPA
         run: |
           APP_PATH="build/Build/Products/Release-iphoneos/HIIT.app"
@@ -66,12 +78,14 @@ jobs:
           VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9][0-9.]*\);.*/\1/p' HIIT.xcodeproj/project.pbxproj | head -1)
           TAG="v${VERSION:-1.0}.${{ github.run_number }}"
           cat > release-notes.md <<'NOTES'
-          Unsigned iOS build, packaged automatically from the latest merge to `main`.
+          iOS build (ad-hoc signed, HealthKit entitlement embedded), packaged automatically from the latest merge to `main`.
 
           **Install (sideload):**
           - **AltStore / SideStore** — add this IPA; it is re-signed with your Apple ID automatically.
-          - **Sideloadly** — drag the IPA in and sign with your Apple ID.
-          - Or clone the repo and run from Xcode (most reliable, and the fallback if Health permissions don't appear after sideloading).
+          - **Sideloadly** — drag the IPA in and sign with your Apple ID (keep the HealthKit entitlement enabled).
+          - Or clone the repo and run from Xcode.
+
+          **If the Apple Health permission sheet never appears** after tapping Connect, your signing tool stripped the HealthKit entitlement during re-signing — the app will tell you so. Reinstall via Xcode (always works) or re-sign with HealthKit kept.
 
           Free Apple IDs: sideloaded apps expire after 7 days — reinstall to refresh. Requires iOS 17+.
           NOTES

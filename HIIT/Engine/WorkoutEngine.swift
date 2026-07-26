@@ -5,7 +5,8 @@ import AudioToolbox
 
 /// Live-session state machine: drives the phase timer, fires haptic/sound cues
 /// (including the early "change coming" warning sized to the machine's lag),
-/// aggregates heart-rate samples, and produces the final SessionResult.
+/// aggregates heart-rate samples, supports mid-workout target overrides, and
+/// produces the final SessionResult.
 @Observable
 final class WorkoutEngine {
 
@@ -22,11 +23,17 @@ final class WorkoutEngine {
     var soundOn = true
     var hapticsOn = true
     var maxHR: Double? = nil
+    var machine: MachineProfile
 
     private(set) var latestHR: Double? = nil
     private(set) var latestHRDate: Date? = nil
     private(set) var maxObservedHR: Double? = nil
     private(set) var coachMessage: String = ""
+    private(set) var hrRecovery: Double? = nil
+
+    /// The targets actually in play. Starts as a copy of the plan; mid-workout
+    /// overrides mutate the current phase and every later phase of the same kind.
+    private(set) var appliedTargets: [PhaseTarget]
 
     private var timer: Timer? = nil
     private var phaseStart = Date()
@@ -38,10 +45,13 @@ final class WorkoutEngine {
     private var workHRSum = 0.0
     private var workHRCount = 0.0
     private var coachUpdatedAt = Date.distantPast
+    private var recoveryAnchor: (time: Date, hr: Double)? = nil
 
     init(plan: WorkoutPlan) {
         self.plan = plan
+        self.machine = .defaults(for: plan.equipment)
         self.actualSeconds = Array(repeating: 0, count: plan.phases.count)
+        self.appliedTargets = plan.phases.map { $0.target }
     }
 
     // MARK: - Derived state
@@ -52,6 +62,19 @@ final class WorkoutEngine {
 
     var nextPhase: IntervalPhase? {
         phaseIndex + 1 < plan.phases.count ? plan.phases[phaseIndex + 1] : nil
+    }
+
+    var currentTarget: PhaseTarget {
+        appliedTargets[min(phaseIndex, appliedTargets.count - 1)]
+    }
+
+    var nextTarget: PhaseTarget? {
+        phaseIndex + 1 < appliedTargets.count ? appliedTargets[phaseIndex + 1] : nil
+    }
+
+    /// True when the user has nudged the current phase away from the plan.
+    var currentTargetAdjusted: Bool {
+        currentTarget != currentPhase.target
     }
 
     var phaseRemaining: Double { max(0, currentPhase.seconds - phaseElapsed) }
@@ -84,8 +107,38 @@ final class WorkoutEngine {
     /// True when a target change is imminent — the UI turns amber so the user
     /// can start adjusting the machine before the phase actually flips.
     var isWarning: Bool {
-        guard state == .running, let next = nextPhase else { return false }
-        return phaseRemaining <= effectiveCueLead && next.target != currentPhase.target
+        guard state == .running, let next = nextTarget else { return false }
+        return phaseRemaining <= effectiveCueLead && next != currentTarget
+    }
+
+    // MARK: - Mid-workout overrides
+
+    /// "It said 5.0 but I'm running 5.5": bump speed by 0.1 mph (or resistance
+    /// by 1 level) for this phase and every remaining phase of the same kind,
+    /// clamped to the machine. Records, calories, distance, and next-session
+    /// progression all follow the adjusted numbers.
+    func adjustCurrentTarget(up: Bool) {
+        guard state == .running || state == .paused else { return }
+        let kind = currentPhase.kind
+        if plan.equipment == .bike {
+            let step = up ? 1 : -1
+            for i in phaseIndex..<plan.phases.count where plan.phases[i].kind == kind {
+                if let resistance = appliedTargets[i].resistance {
+                    appliedTargets[i].resistance = max(1, min(machine.maxResistance, resistance + step))
+                }
+            }
+        } else {
+            let step = up ? 0.1 : -0.1
+            for i in phaseIndex..<plan.phases.count where plan.phases[i].kind == kind {
+                if let speed = appliedTargets[i].speedMph {
+                    let adjusted = ((speed + step) * 10).rounded() / 10
+                    appliedTargets[i].speedMph = max(0.5, min(machine.maxSpeedMph, adjusted))
+                }
+            }
+        }
+        if hapticsOn {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
     }
 
     // MARK: - Control
@@ -151,11 +204,19 @@ final class WorkoutEngine {
     private func advance(auto: Bool, overshoot: Double) {
         actualSeconds[phaseIndex] = auto ? currentPhase.seconds : min(phaseElapsed, currentPhase.seconds)
         lastBeepSecond = -1
+        let leavingKind = currentPhase.kind
         if phaseIndex + 1 >= plan.phases.count {
             finish(early: false)
             return
         }
         phaseIndex += 1
+        // Leaving a hard effort with fresh HR data: anchor a 1-minute
+        // heart-rate-recovery measurement (a well-studied fitness marker).
+        if leavingKind == .work && currentPhase.kind != .work,
+           let hr = latestHR, let hrDate = latestHRDate,
+           Date().timeIntervalSince(hrDate) < 15 {
+            recoveryAnchor = (Date(), hr)
+        }
         let carry = max(0, min(overshoot, 1))
         phaseStart = Date().addingTimeInterval(-carry)
         phaseElapsed = carry
@@ -185,6 +246,16 @@ final class WorkoutEngine {
             workHRSum += bpm
             workHRCount += 1
         }
+        if let anchor = recoveryAnchor {
+            let dt = date.timeIntervalSince(anchor.time)
+            if dt >= 55 && dt <= 80 {
+                let drop = anchor.hr - bpm
+                if drop > 0 { hrRecovery = drop }
+                recoveryAnchor = nil
+            } else if dt > 80 {
+                recoveryAnchor = nil
+            }
+        }
     }
 
     private func updateCoachMessage() {
@@ -195,9 +266,9 @@ final class WorkoutEngine {
             let pct = hr / maxHR * 100
             switch currentPhase.kind {
             case .work:
-                if let hi = currentPhase.target.hrPercentHigh, pct > hi + 3 {
+                if let hi = currentTarget.hrPercentHigh, pct > hi + 3 {
                     message = "Ease off a touch — heart rate is above target"
-                } else if let lo = currentPhase.target.hrPercentLow, pct < lo - 6, phaseElapsed > 20 {
+                } else if let lo = currentTarget.hrPercentLow, pct < lo - 6, phaseElapsed > 20 {
                     message = "You've got headroom — push a little harder"
                 } else {
                     message = "Right in the zone — hold this"
@@ -250,14 +321,15 @@ final class WorkoutEngine {
     func makeResult(machine: MachineProfile, weightKg: Double?) -> SessionResult {
         var records: [PhaseRecord] = []
         for (i, phase) in plan.phases.enumerated() {
+            let target = appliedTargets[i]
             records.append(PhaseRecord(
                 kind: phase.kind.rawValue,
                 label: phase.label,
                 plannedSeconds: phase.seconds,
                 actualSeconds: actualSeconds[i],
-                speedMph: phase.target.speedMph,
-                inclinePercent: phase.target.inclinePercent,
-                resistance: phase.target.resistance))
+                speedMph: target.speedMph,
+                inclinePercent: target.inclinePercent,
+                resistance: target.resistance))
         }
         let estimate = MetabolicMath.estimate(records: records, equipment: plan.equipment, machine: machine, weightKg: weightKg)
 
@@ -272,6 +344,30 @@ final class WorkoutEngine {
             }
         }
 
+        // Express any manual override in "progression levels" so the next
+        // session starts where the user actually trained. The generator adds
+        // 0.2 mph (or ~1.5% of max resistance) per level.
+        var overrideSum = 0.0
+        var overrideCount = 0.0
+        for (i, phase) in plan.phases.enumerated() where phase.kind == .work {
+            if plan.equipment == .bike {
+                if let applied = appliedTargets[i].resistance, let planned = phase.target.resistance {
+                    overrideSum += Double(applied - planned)
+                    overrideCount += 1
+                }
+            } else if let applied = appliedTargets[i].speedMph, let planned = phase.target.speedMph {
+                overrideSum += applied - planned
+                overrideCount += 1
+            }
+        }
+        let overrideAvg = overrideCount > 0 ? overrideSum / overrideCount : 0
+        let overrideLevels: Double
+        if plan.equipment == .bike {
+            overrideLevels = overrideAvg / max(1.0, 0.015 * Double(machine.maxResistance))
+        } else {
+            overrideLevels = overrideAvg / 0.2
+        }
+
         return SessionResult(
             plan: plan,
             startDate: startDate,
@@ -283,6 +379,8 @@ final class WorkoutEngine {
             avgHeartRate: hrCount > 0 ? hrSum / hrCount : nil,
             maxHeartRate: maxObservedHR,
             avgWorkHeartRate: workHRCount > 0 ? workHRSum / workHRCount : nil,
+            hrRecovery: hrRecovery,
+            workOverrideLevels: overrideLevels,
             estimatedCalories: estimate.kcal,
             estimatedDistanceMeters: estimate.meters,
             endedEarly: endedEarly)

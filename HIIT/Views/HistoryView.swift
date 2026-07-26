@@ -4,10 +4,14 @@ import Charts
 
 struct HistoryView: View {
     @Environment(SettingsStore.self) private var settings
+    @Environment(HealthKitManager.self) private var health
     @Environment(\.modelContext) private var context
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
     @State private var showCoach = false
     @State private var coachSummary = ""
+    @State private var vo2Series: [HealthKitManager.SamplePoint] = []
+    @State private var restingSeries: [HealthKitManager.SamplePoint] = []
+    @State private var fitnessLoaded = false
 
     var body: some View {
         NavigationStack {
@@ -19,6 +23,30 @@ struct HistoryView: View {
                         description: Text("Finished sessions land here, along with your weekly trend."))
                 } else {
                     List {
+                        if !vo2Series.isEmpty || !restingSeries.isEmpty {
+                            Section {
+                                if !vo2Series.isEmpty {
+                                    FitnessSignalRow(
+                                        title: "Cardio Fitness (VO₂max)",
+                                        unit: "mL/kg·min",
+                                        series: vo2Series,
+                                        higherIsBetter: true,
+                                        explainer: "The single best-evidenced fitness number — and the one HIIT improves most directly.")
+                                }
+                                if !restingSeries.isEmpty {
+                                    FitnessSignalRow(
+                                        title: "Resting heart rate",
+                                        unit: "bpm",
+                                        series: restingSeries,
+                                        higherIsBetter: false,
+                                        explainer: "Tends to drift down as your aerobic engine gets stronger.")
+                                }
+                            } header: {
+                                Text("Fitness signals")
+                            } footer: {
+                                Text("From Apple Health, last 6 months. Apple estimates VO₂max from outdoor Watch walks and runs.")
+                            }
+                        }
                         Section("Weekly minutes") {
                             WeeklyMinutesChart(sessions: sessions)
                                 .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
@@ -53,6 +81,12 @@ struct HistoryView: View {
             .sheet(isPresented: $showCoach) {
                 CoachSheetView(summary: coachSummary)
             }
+            .task {
+                guard !fitnessLoaded else { return }
+                vo2Series = await health.fetchSeries(.vo2Max, unit: HealthKitManager.vo2MaxUnit, daysBack: 180)
+                restingSeries = await health.fetchSeries(.restingHeartRate, unit: HealthKitManager.bpmUnit, daysBack: 180)
+                fitnessLoaded = true
+            }
         }
     }
 
@@ -61,6 +95,60 @@ struct HistoryView: View {
             context.delete(sessions[index])
         }
         try? context.save()
+    }
+}
+
+/// Latest value, trend over the window, and a small sparkline. Coloring is
+/// about direction of *improvement*, not direction of the number.
+struct FitnessSignalRow: View {
+    let title: String
+    let unit: String
+    let series: [HealthKitManager.SamplePoint]
+    let higherIsBetter: Bool
+    let explainer: String
+
+    private var latest: Double { series.last?.value ?? 0 }
+    private var delta: Double { latest - (series.first?.value ?? latest) }
+    private var improving: Bool { higherIsBetter ? delta >= 0 : delta <= 0 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(String(format: "%.1f", latest))
+                            .font(.title3.weight(.bold))
+                            .monospacedDigit()
+                        Text(unit)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if abs(delta) >= 0.05 {
+                        Text(String(format: "%+.1f over 6 months", delta))
+                            .font(.caption)
+                            .foregroundStyle(improving ? Theme.recover : Theme.steady)
+                    }
+                }
+                Spacer()
+                Chart(series) { point in
+                    LineMark(
+                        x: .value("Date", point.date),
+                        y: .value("Value", point.value))
+                        .foregroundStyle(improving ? Theme.recover : Theme.steady)
+                        .interpolationMethod(.catmullRom)
+                }
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .chartYScale(domain: .automatic(includesZero: false))
+                .frame(width: 96, height: 44)
+            }
+            Text(explainer)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -135,6 +223,11 @@ struct SessionDetailView: View {
                         StatTile(title: "Avg HR", value: session.avgHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
                         StatTile(title: "Max HR", value: session.maxHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
                         StatTile(title: "Effort", value: session.rpe.map { "\($0)/10" } ?? "—", subtitle: "your rating")
+                    }
+                    if let recovery = session.hrRecovery {
+                        StatTile(title: "Heart-rate recovery (1 min)",
+                                 value: "−\(Int(recovery)) bpm",
+                                 subtitle: "drop after the last hard effort — bigger is better")
                     }
                 }
 

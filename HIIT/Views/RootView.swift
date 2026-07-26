@@ -27,6 +27,7 @@ struct WelcomeView: View {
     @Environment(HealthKitManager.self) private var health
     @Environment(\.dismiss) private var dismiss
     @State private var connecting = false
+    @State private var healthError: String? = nil
 
     var body: some View {
         VStack(spacing: 28) {
@@ -54,7 +55,11 @@ struct WelcomeView: View {
                 Button {
                     connecting = true
                     Task {
-                        _ = await health.requestAuthorization()
+                        if let error = await health.requestAuthorization() {
+                            healthError = error
+                            connecting = false
+                            return
+                        }
                         let snapshot = await health.fetchProfile()
                         settings.apply(snapshot)
                         connecting = false
@@ -79,6 +84,14 @@ struct WelcomeView: View {
             }
         }
         .padding(24)
+        .alert("Couldn't connect Apple Health", isPresented: Binding(
+            get: { healthError != nil },
+            set: { if !$0 { healthError = nil } })) {
+            Button("Continue without Health") { dismiss() }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(healthError ?? "")
+        }
     }
 
     private func featureRow(icon: String, title: String, text: String) -> some View {
