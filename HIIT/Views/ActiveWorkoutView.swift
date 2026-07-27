@@ -5,6 +5,7 @@ import SwiftUI
 struct ActiveWorkoutContainerView: View {
     @Environment(SettingsStore.self) private var settings
     @Environment(HealthKitManager.self) private var health
+    @Environment(BluetoothHeartRateManager.self) private var ble
     @Environment(\.dismiss) private var dismiss
     @State private var engine: WorkoutEngine
 
@@ -26,13 +27,26 @@ struct ActiveWorkoutContainerView: View {
             engine.maxHR = settings.maxHR
             engine.machine = settings.machine(for: engine.plan.equipment)
             engine.start()
+            // Live HR priority: a paired BLE monitor streams every second;
+            // Health-sourced samples (Watch workouts) back-fill when no strap.
+            ble.workoutActive = true
+            if let idString = settings.value.hrMonitorID, let uuid = UUID(uuidString: idString) {
+                ble.connectToSaved(id: uuid, name: settings.value.hrMonitorName ?? "your monitor")
+            }
             health.startHeartRateUpdates()
         }
         .onDisappear {
+            ble.workoutActive = false
+            ble.disconnect()
             health.stopHeartRateUpdates()
         }
-        .onChange(of: health.liveHeartRate) { _, newValue in
+        .onChange(of: ble.latestHR) { _, newValue in
             if let bpm = newValue {
+                engine.recordHeartRate(bpm, at: ble.latestHRDate ?? Date(), fromBLE: true)
+            }
+        }
+        .onChange(of: health.liveHeartRate) { _, newValue in
+            if let bpm = newValue, !ble.isConnected {
                 engine.recordHeartRate(bpm, at: health.liveHeartRateDate ?? Date())
             }
         }
@@ -42,6 +56,7 @@ struct ActiveWorkoutContainerView: View {
 struct ActiveWorkoutView: View {
     let engine: WorkoutEngine
     @Environment(SettingsStore.self) private var settings
+    @Environment(BluetoothHeartRateManager.self) private var ble
     @State private var showEndConfirm = false
 
     private var phaseColor: Color {
@@ -229,13 +244,26 @@ struct ActiveWorkoutView: View {
                     .foregroundStyle(.white.opacity(0.4))
             }
             Spacer()
-            Text(engine.coachMessage.isEmpty ? "Live HR needs a Watch workout or HR strap" : engine.coachMessage)
+            Text(engine.coachMessage.isEmpty ? hrHint : engine.coachMessage)
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.65))
                 .multilineTextAlignment(.trailing)
         }
         .padding(14)
         .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var hrHint: String {
+        switch ble.status {
+        case .connected(let name):
+            return "Live from \(name)"
+        case .connecting(let name):
+            return "Connecting to \(name)…"
+        case .bluetoothOff:
+            return "Bluetooth is off — your monitor can't connect"
+        default:
+            return "For live HR: pair a strap in Settings, or start a Watch workout"
+        }
     }
 
     private var controls: some View {

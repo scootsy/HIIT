@@ -46,6 +46,7 @@ final class WorkoutEngine {
     private var workHRCount = 0.0
     private var coachUpdatedAt = Date.distantPast
     private var recoveryAnchor: (time: Date, hr: Double)? = nil
+    private var storedHRSamples: [HRSample] = []
 
     init(plan: WorkoutPlan) {
         self.plan = plan
@@ -235,10 +236,22 @@ final class WorkoutEngine {
 
     // MARK: - Heart rate
 
-    func recordHeartRate(_ bpm: Double, at date: Date) {
+    func recordHeartRate(_ bpm: Double, at date: Date, fromBLE: Bool = false) {
         latestHR = bpm
         latestHRDate = date
         guard state == .running else { return }
+        // Keep strap readings (≈1 per 5s) so the workout saved to Health
+        // carries a real heart-rate trace; Health-sourced readings are
+        // already in Health and would only duplicate.
+        if fromBLE {
+            if let last = storedHRSamples.last {
+                if date.timeIntervalSince(last.date) >= 4.5 {
+                    storedHRSamples.append(HRSample(date: date, bpm: bpm))
+                }
+            } else {
+                storedHRSamples.append(HRSample(date: date, bpm: bpm))
+            }
+        }
         hrSum += bpm
         hrCount += 1
         maxObservedHR = max(maxObservedHR ?? 0, bpm)
@@ -381,6 +394,7 @@ final class WorkoutEngine {
             avgWorkHeartRate: workHRCount > 0 ? workHRSum / workHRCount : nil,
             hrRecovery: hrRecovery,
             workOverrideLevels: overrideLevels,
+            heartRateSamples: storedHRSamples,
             estimatedCalories: estimate.kcal,
             estimatedDistanceMeters: estimate.meters,
             endedEarly: endedEarly)
