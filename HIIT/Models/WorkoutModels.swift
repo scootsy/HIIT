@@ -91,6 +91,12 @@ struct PhaseRecord: Codable {
     var kindValue: PhaseKind { PhaseKind(rawValue: kind) ?? .work }
 }
 
+/// One heart-rate reading captured from a directly connected BLE monitor.
+struct HRSample {
+    var date: Date
+    var bpm: Double
+}
+
 struct SessionResult {
     var plan: WorkoutPlan
     var startDate: Date
@@ -106,6 +112,9 @@ struct SessionResult {
     var hrRecovery: Double? = nil
     /// Mid-workout manual overrides, expressed in progression levels (positive = user went harder than planned).
     var workOverrideLevels: Double = 0
+    /// Strap-sourced readings to write to Apple Health with the workout.
+    /// Watch/Health-sourced readings are excluded — they're already in Health.
+    var heartRateSamples: [HRSample] = []
     var estimatedCalories: Double
     var estimatedDistanceMeters: Double
     var endedEarly: Bool

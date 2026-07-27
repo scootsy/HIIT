@@ -54,7 +54,7 @@ final class HealthKitManager {
         for id in readIDs {
             if let type = quantityType(id) { read.insert(type) }
         }
-        let shareIDs: [HKQuantityTypeIdentifier] = [.activeEnergyBurned, .distanceWalkingRunning, .distanceCycling]
+        let shareIDs: [HKQuantityTypeIdentifier] = [.activeEnergyBurned, .distanceWalkingRunning, .distanceCycling, .heartRate]
         for id in shareIDs {
             if let type = quantityType(id) { share.insert(type) }
         }
@@ -190,6 +190,16 @@ final class HealthKitManager {
                     quantity: HKQuantity(unit: .meter(), doubleValue: result.estimatedDistanceMeters),
                     start: result.startDate,
                     end: result.endDate))
+            }
+            if !result.heartRateSamples.isEmpty, let type = quantityType(.heartRate) {
+                let hrSamples = result.heartRateSamples.map { sample in
+                    HKQuantitySample(
+                        type: type,
+                        quantity: HKQuantity(unit: Self.bpmUnit, doubleValue: sample.bpm),
+                        start: sample.date,
+                        end: sample.date)
+                }
+                samples.append(contentsOf: hrSamples)
             }
             if !samples.isEmpty {
                 try await builder.addSamples(samples)

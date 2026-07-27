@@ -44,13 +44,19 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 
 Notes for free accounts: apps expire after 7 days (re-run from Xcode to refresh), and you're limited to 3 sideloaded apps at a time. The HealthKit capability works fine with free provisioning.
 
-## Live heart rate — what to expect
+## Live heart rate — two ways
 
-iPhone apps can't produce heart-rate data themselves. The app reads the most recent samples written to HealthKit, which stream in near-real-time when an Apple Watch has a workout running (start any workout on the Watch) or when a Bluetooth chest strap is paired through a companion app that writes to Health. Without a source, everything still works — you just train by the speed/resistance targets and RPE instead of live bpm.
+**Bluetooth monitor (best, no Apple Watch needed).** Any watch or chest strap that broadcasts the standard Bluetooth heart-rate profile works: Amazfit watches/straps (turn on heart-rate broadcast in the Zepp app), Polar, Garmin, Coospo, and most gym straps. Pair once in Settings → Heart-rate monitor, and every workout connects automatically and shows your pulse second-by-second. The architecture is deliberately `strap → app` live, `app → Apple Health` for the durable record — Health is a database, not a real-time sensor feed, and third-party watch apps batch their Health writes far too slowly for live coaching. Strap-sourced heart-rate samples are saved to Health with the finished workout, so your Health history gets the full trace.
+
+**Apple Watch.** Start any workout on the Watch and its heart-rate samples stream through Health in near-real-time; the app picks those up automatically (a paired Bluetooth monitor takes priority if both are present, since it updates faster).
+
+Without either source, everything still works — you train by the speed/resistance targets and RPE instead of live bpm.
 
 ## Sideloading and the Health permission sheet
 
-The HealthKit permission sheet can only appear if the installed app carries the `com.apple.developer.healthkit` entitlement. Xcode installs always do. Sideloaded IPAs depend on the re-signing tool: the CI-built IPA ships ad-hoc-signed with the entitlement embedded so AltStore/SideStore/Sideloadly can carry it over, but if your tool strips it, iOS silently refuses the authorization request — the app detects this and tells you, and reinstalling via Xcode fixes it.
+The HealthKit permission sheet can only appear if the installed app carries the `com.apple.developer.healthkit` entitlement. Xcode installs always do. Sideloaded IPAs depend on the re-signing tool: the CI-built IPA ships ad-hoc-signed with the entitlement embedded so AltStore/SideStore/Sideloadly can carry it over, but if your tool strips it, iOS silently refuses the authorization request — the app detects this and tells you, and reinstalling via Xcode fixes it. This applies doubly to container-style launchers (LiveContainer and similar), which run the app under their own signature.
+
+Helpfully, the live Bluetooth heart-rate path uses CoreBluetooth, not HealthKit — so live HR from a paired strap works even in installs where the Health integration can't. You lose only the durable Health sync until the app runs properly signed.
 
 ## Project layout
 

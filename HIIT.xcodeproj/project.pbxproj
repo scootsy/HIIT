@@ -257,6 +257,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "HIIT Coach";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "HIIT Coach connects to Bluetooth heart-rate monitors (chest straps and broadcast-capable watches) to show your live heart rate during workouts.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "HIIT Coach reads your heart rate, resting heart rate, weight, height, and date of birth to personalize workout targets and show live heart-rate guidance during sessions.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "HIIT Coach saves your finished interval workouts (duration, estimated calories, and distance) to Apple Health.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -290,6 +291,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "HIIT Coach";
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "HIIT Coach connects to Bluetooth heart-rate monitors (chest straps and broadcast-capable watches) to show your live heart rate during workouts.";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "HIIT Coach reads your heart rate, resting heart rate, weight, height, and date of birth to personalize workout targets and show live heart-rate guidance during sessions.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "HIIT Coach saves your finished interval workouts (duration, estimated calories, and distance) to Apple Health.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

@@ -13,12 +13,25 @@ struct SettingsView: View {
     @State private var refreshing = false
     @State private var healthError: String? = nil
     @State private var editingField: ProfileField? = nil
+    @State private var showHRMonitor = false
 
     var body: some View {
         @Bindable var store = settings
         NavigationStack {
             Form {
                 profileSection
+                Section {
+                    Button {
+                        showHRMonitor = true
+                    } label: {
+                        LabeledContent("Heart-rate monitor", value: settings.value.hrMonitorName ?? "Add")
+                    }
+                    .foregroundStyle(.primary)
+                } header: {
+                    Text("Live heart rate")
+                } footer: {
+                    Text("Works with any watch or chest strap that broadcasts standard Bluetooth heart rate (Amazfit, Polar, Garmin, Coospo…). Pair once and every workout connects automatically. Apple Watch users can skip this — just start any workout on the Watch.")
+                }
                 Section("Training") {
                     Picker("Experience", selection: experienceBinding) {
                         ForEach(ExperienceLevel.allCases) { level in
@@ -74,6 +87,9 @@ struct SettingsView: View {
             .sheet(item: $editingField) { field in
                 profileEditor(for: field)
                     .presentationDetents([.height(320)])
+            }
+            .sheet(isPresented: $showHRMonitor) {
+                HRMonitorSheet()
             }
             .alert("Couldn't connect Apple Health", isPresented: healthErrorBinding) {
                 Button("OK", role: .cancel) {}
