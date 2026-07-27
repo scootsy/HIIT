@@ -19,6 +19,9 @@ final class WorkoutEngine {
     private(set) var startDate = Date()
     private(set) var endDate = Date()
     private(set) var endedEarly = false
+    /// True after the plan's last phase finishes: the workout keeps running
+    /// (timer counts up, heart rate keeps logging) until the user ends it.
+    private(set) var inOvertime = false
 
     var soundOn = true
     var hapticsOn = true
@@ -30,6 +33,8 @@ final class WorkoutEngine {
     private(set) var maxObservedHR: Double? = nil
     private(set) var coachMessage: String = ""
     private(set) var hrRecovery: Double? = nil
+    /// Every reading from any source (~1 per 2s), for the live workout graph.
+    private(set) var hrHistory: [HRSample] = []
 
     /// The targets actually in play. Starts as a copy of the plan; mid-workout
     /// overrides mutate the current phase and every later phase of the same kind.
@@ -85,9 +90,23 @@ final class WorkoutEngine {
     }
 
     var totalElapsed: Double {
-        var t = min(phaseElapsed, currentPhase.seconds)
+        var t = inOvertime ? phaseElapsed : min(phaseElapsed, currentPhase.seconds)
         for i in 0..<phaseIndex { t += actualSeconds[i] }
         return t
+    }
+
+    var overtimeSeconds: Double {
+        inOvertime ? max(0, phaseElapsed - currentPhase.seconds) : 0
+    }
+
+    /// "4 of 9" — work efforts fully behind you, visible during recoveries too.
+    var workEffortsDone: Int {
+        var count = 0
+        for i in 0..<min(phaseIndex, plan.phases.count) where plan.phases[i].kind == .work {
+            count += 1
+        }
+        if inOvertime && currentPhase.kind == .work { count += 1 }
+        return count
     }
 
     var totalRemaining: Double {
@@ -108,7 +127,7 @@ final class WorkoutEngine {
     /// True when a target change is imminent — the UI turns amber so the user
     /// can start adjusting the machine before the phase actually flips.
     var isWarning: Bool {
-        guard state == .running, let next = nextTarget else { return false }
+        guard state == .running, !inOvertime, let next = nextTarget else { return false }
         return phaseRemaining <= effectiveCueLead && next != currentTarget
     }
 
@@ -119,22 +138,26 @@ final class WorkoutEngine {
     /// clamped to the machine. Records, calories, distance, and next-session
     /// progression all follow the adjusted numbers.
     func adjustCurrentTarget(up: Bool) {
+        adjustTarget(phaseAt: phaseIndex, up: up)
+    }
+
+    /// Also callable for a *completed* phase ("that sprint was actually 5.5"):
+    /// corrects that phase's record and recalibrates every not-yet-run phase
+    /// of the same kind. Other already-finished phases keep what they were.
+    func adjustTarget(phaseAt index: Int, up: Bool) {
         guard state == .running || state == .paused else { return }
-        let kind = currentPhase.kind
-        if plan.equipment == .bike {
-            let step = up ? 1 : -1
-            for i in phaseIndex..<plan.phases.count where plan.phases[i].kind == kind {
+        guard plan.phases.indices.contains(index) else { return }
+        let kind = plan.phases[index].kind
+        for i in plan.phases.indices where plan.phases[i].kind == kind && (i == index || i >= phaseIndex) {
+            if plan.equipment == .bike {
                 if let resistance = appliedTargets[i].resistance {
+                    let step = up ? 1 : -1
                     appliedTargets[i].resistance = max(1, min(machine.maxResistance, resistance + step))
                 }
-            }
-        } else {
-            let step = up ? 0.1 : -0.1
-            for i in phaseIndex..<plan.phases.count where plan.phases[i].kind == kind {
-                if let speed = appliedTargets[i].speedMph {
-                    let adjusted = ((speed + step) * 10).rounded() / 10
-                    appliedTargets[i].speedMph = max(0.5, min(machine.maxSpeedMph, adjusted))
-                }
+            } else if let speed = appliedTargets[i].speedMph {
+                let step = up ? 0.1 : -0.1
+                let adjusted = ((speed + step) * 10).rounded() / 10
+                appliedTargets[i].speedMph = max(0.5, min(machine.maxSpeedMph, adjusted))
             }
         }
         if hapticsOn {
@@ -178,8 +201,9 @@ final class WorkoutEngine {
 
     func endWorkout() {
         guard state == .running || state == .paused else { return }
-        actualSeconds[phaseIndex] = min(phaseElapsed, currentPhase.seconds)
-        finish(early: phaseIndex < plan.phases.count - 1)
+        // Overtime counts as real training time at the final phase's targets.
+        actualSeconds[phaseIndex] = inOvertime ? phaseElapsed : min(phaseElapsed, currentPhase.seconds)
+        finish(early: !inOvertime && phaseIndex < plan.phases.count - 1)
     }
 
     // MARK: - Timer
@@ -196,8 +220,14 @@ final class WorkoutEngine {
                 cue(.tick)
             }
         }
-        if remaining <= 0 {
-            advance(auto: true, overshoot: -remaining)
+        if remaining <= 0 && !inOvertime {
+            if phaseIndex + 1 < plan.phases.count {
+                advance(auto: true, overshoot: -remaining)
+            } else {
+                // Plan complete — chime, but never end on the user's behalf.
+                inOvertime = true
+                cue(.finish)
+            }
         }
         updateCoachMessage()
     }
@@ -207,7 +237,9 @@ final class WorkoutEngine {
         lastBeepSecond = -1
         let leavingKind = currentPhase.kind
         if phaseIndex + 1 >= plan.phases.count {
-            finish(early: false)
+            // Manual skip on the final phase: straight to overtime, not out.
+            inOvertime = true
+            cue(.finish)
             return
         }
         phaseIndex += 1
@@ -240,6 +272,13 @@ final class WorkoutEngine {
         latestHR = bpm
         latestHRDate = date
         guard state == .running else { return }
+        if let last = hrHistory.last {
+            if date.timeIntervalSince(last.date) >= 2 {
+                hrHistory.append(HRSample(date: date, bpm: bpm))
+            }
+        } else {
+            hrHistory.append(HRSample(date: date, bpm: bpm))
+        }
         // Keep strap readings (≈1 per 5s) so the workout saved to Health
         // carries a real heart-rate trace; Health-sourced readings are
         // already in Health and would only duplicate.
