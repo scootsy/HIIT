@@ -11,8 +11,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Write access is granted only to the release job below — the compile job
+# (which also runs on PRs) needs nothing beyond read.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -70,8 +72,25 @@ jobs:
           name: HIIT-unsigned-ipa
           path: HIIT-unsigned.ipa
 
+  # Publishing is a separate job so the write token never reaches the build
+  # steps, and it is gated to pushes of main — a manual dispatch from a side
+  # branch must not publish unreviewed code as the latest release.
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Download IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HIIT-unsigned-ipa
+
       - name: Create GitHub release
-        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

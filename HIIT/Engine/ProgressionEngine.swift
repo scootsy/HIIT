@@ -39,8 +39,13 @@ enum ProgressionEngine {
         }
 
         // Mid-workout overrides are the strongest signal we have — the user
-        // told us, mid-effort, where the targets actually belong.
-        let override = max(-2, min(2, workOverrideLevels))
+        // told us, mid-effort, where the targets actually belong. But an
+        // unfinished session must never net a step up: positive override
+        // credit only counts when the session was actually completed.
+        var override = max(-2, min(2, workOverrideLevels))
+        if completionRatio < 0.8 {
+            override = min(0, override)
+        }
         if override > 0.2 {
             level += override
             note = "You ran ahead of the targets today — next session starts where you actually trained."
@@ -64,7 +69,7 @@ enum ProgressionEngine {
     /// protocols, HR bands).
     static let tierLevelSpan = 7.0
 
-    static func tierChange(experience: ExperienceLevel, progressLevel: Double) -> (newExperience: ExperienceLevel, note: String)? {
+    static func tierChange(experience: ExperienceLevel, progressLevel: Double, declined: Bool) -> (newExperience: ExperienceLevel, note: String)? {
         if progressLevel >= tierLevelSpan {
             switch experience {
             case .beginner:
@@ -75,7 +80,12 @@ enum ProgressionEngine {
                 return nil
             }
         }
-        if progressLevel <= -3 {
+        // Demote only when this session's own results drove the level down.
+        // A promotion on one machine rebases every other machine's level by
+        // -tierLevelSpan, which can park a lightly-trained machine below the
+        // threshold — without this gate, the very next session on it would
+        // demote the tier and the promotion/demotion would ping-pong forever.
+        if declined && progressLevel <= -3 {
             switch experience {
             case .beginner:
                 return nil
@@ -86,5 +96,14 @@ enum ProgressionEngine {
             }
         }
         return nil
+    }
+
+    /// Detraining after a break: fitness fades when training stops, so after
+    /// two weeks off the accumulated level tapers by ~0.5 per missed week.
+    /// Decay never pushes the level below zero — the tier baseline stands.
+    static func decayedLevel(_ level: Double, daysSince: Int?) -> Double {
+        guard let days = daysSince, days > 14, level > 0 else { return level }
+        let missedWeeks = Double(days - 14) / 7 + 1
+        return max(0, level - 0.5 * missedWeeks)
     }
 }

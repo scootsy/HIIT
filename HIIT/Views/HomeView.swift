@@ -5,6 +5,7 @@ struct HomeView: View {
     @Environment(SettingsStore.self) private var settings
     @Query(sort: \WorkoutSession.date, order: .reverse) private var sessions: [WorkoutSession]
     @State private var showSetup = false
+    @State private var pendingPlan: WorkoutPlan? = nil
     @State private var activePlan: WorkoutPlan? = nil
 
     var body: some View {
@@ -28,12 +29,18 @@ struct HomeView: View {
                 SessionDetailView(session: session)
             }
         }
-        .sheet(isPresented: $showSetup) {
+        // The workout cover is presented from the setup sheet's onDismiss —
+        // sequenced by the framework instead of a wall-clock delay racing
+        // the dismissal animation.
+        .sheet(isPresented: $showSetup, onDismiss: {
+            if let plan = pendingPlan {
+                pendingPlan = nil
+                activePlan = plan
+            }
+        }) {
             SetupView { plan in
+                pendingPlan = plan
                 showSetup = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                    activePlan = plan
-                }
             }
         }
         .fullScreenCover(item: $activePlan) { plan in
@@ -70,10 +77,15 @@ struct HomeView: View {
         guard let last = sessions.first else {
             return "Pick a machine and 15 minutes — it builds from there."
         }
-        let days = Calendar.current.dateComponents([.day], from: last.date, to: Date()).day ?? 0
-        if days == 0 {
+        // Calendar days, not elapsed 24-hour periods — a 9pm session must
+        // not still read "Trained today" the next morning.
+        let calendar = Calendar.current
+        if calendar.isDateInToday(last.date) {
             return "Trained today. Going again? Keep it short and easy."
         }
+        let days = calendar.dateComponents([.day],
+                                           from: calendar.startOfDay(for: last.date),
+                                           to: calendar.startOfDay(for: Date())).day ?? 0
         if days >= 4 {
             return "\(days) days off — ease back in."
         }
@@ -135,10 +147,10 @@ struct HomeView: View {
                 Image(systemName: "bolt.fill")
                 Text("Start a workout")
             }
-            .font(.headline)
+            .font(.title3.weight(.semibold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
+            .padding(.vertical, 19)
             .background(
                 LinearGradient(colors: [Theme.accent, Color(hex: 0xC2354F)],
                                startPoint: .topLeading, endPoint: .bottomTrailing),
@@ -148,7 +160,7 @@ struct HomeView: View {
         .buttonStyle(.plain)
         .padding(.horizontal, 16)
         .padding(.top, 6)
-        .padding(.bottom, 8)
+        .padding(.bottom, 16)
         .background(
             LinearGradient(colors: [Color(.systemGroupedBackground).opacity(0),
                                     Color(.systemGroupedBackground)],

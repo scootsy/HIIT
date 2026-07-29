@@ -63,7 +63,7 @@ struct IntervalPhase: Identifiable, Codable, Equatable {
     var target: PhaseTarget
 }
 
-struct WorkoutPlan: Identifiable, Equatable {
+struct WorkoutPlan: Identifiable, Codable, Equatable {
     var id = UUID()
     var name: String
     var focus: String
@@ -92,7 +92,7 @@ struct PhaseRecord: Codable {
 }
 
 /// One heart-rate reading captured from a directly connected BLE monitor.
-struct HRSample {
+struct HRSample: Codable {
     var date: Date
     var bpm: Double
 }
