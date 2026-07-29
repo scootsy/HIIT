@@ -1,7 +1,15 @@
 import SwiftUI
+import SwiftData
 
 struct RootView: View {
+    var storeLoadFailed: Bool = false
+
     @AppStorage("hiit.hasOnboarded") private var hasOnboarded = false
+    @Environment(SettingsStore.self) private var settings
+    @Environment(HealthKitManager.self) private var health
+    @Environment(\.modelContext) private var context
+    @State private var pendingCheckpoint: WorkoutCheckpoint? = nil
+    @State private var showStoreWarning = false
 
     var body: some View {
         TabView {
@@ -15,10 +23,59 @@ struct RootView: View {
         .sheet(isPresented: welcomeBinding) {
             WelcomeView()
         }
+        .onAppear {
+            showStoreWarning = storeLoadFailed
+            // A leftover checkpoint means a workout was interrupted (crash,
+            // jetsam, force-quit) before it could be saved — offer it back.
+            if pendingCheckpoint == nil, let checkpoint = WorkoutCheckpoint.load() {
+                if checkpoint.totalSeconds >= 60 {
+                    pendingCheckpoint = checkpoint
+                } else {
+                    WorkoutCheckpoint.clear()
+                }
+            }
+        }
+        .alert("Recover unsaved workout?", isPresented: recoveryBinding) {
+            Button("Save workout") { recoverCheckpoint() }
+            Button("Discard", role: .destructive) {
+                WorkoutCheckpoint.clear()
+                pendingCheckpoint = nil
+            }
+        } message: {
+            if let checkpoint = pendingCheckpoint {
+                Text("A \(Int(checkpoint.totalSeconds / 60))-minute \(checkpoint.plan.equipment.label.lowercased()) session from \(checkpoint.savedAt.formatted(date: .abbreviated, time: .shortened)) ended before it was saved.")
+            }
+        }
+        .alert("Workout history unavailable", isPresented: $showStoreWarning) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your saved workouts couldn't be opened, so this session won't be recorded. Restarting the app usually fixes this; your history has not been deleted.")
+        }
     }
 
     private var welcomeBinding: Binding<Bool> {
         Binding(get: { !hasOnboarded }, set: { hasOnboarded = !$0 })
+    }
+
+    private var recoveryBinding: Binding<Bool> {
+        Binding(get: { pendingCheckpoint != nil && hasOnboarded },
+                set: { if !$0 { pendingCheckpoint = nil } })
+    }
+
+    private func recoverCheckpoint() {
+        guard let checkpoint = pendingCheckpoint else { return }
+        let result = checkpoint.makeResult(
+            machine: settings.machine(for: checkpoint.plan.equipment),
+            weightKg: settings.value.weightKg)
+        let outcome = SessionSaver.save(result: result, rpe: nil, notes: "",
+                                        context: context, settings: settings)
+        pendingCheckpoint = nil
+        let session = outcome.session
+        Task { @MainActor in
+            let ok = await health.saveWorkout(result: result)
+            session.savedToHealth = (ok == .saved)
+            try? context.save()
+        }
     }
 }
 
@@ -61,9 +118,15 @@ struct WelcomeView: View {
                             return
                         }
                         let snapshot = await health.fetchProfile()
-                        settings.apply(snapshot)
+                        let gotData = settings.apply(snapshot)
                         connecting = false
-                        dismiss()
+                        if gotData {
+                            dismiss()
+                        } else {
+                            // Access denied on the sheet, or an empty Health
+                            // profile — don't dismiss as if it worked.
+                            healthError = "No profile data came back. If you declined access, you can allow it later under Health → Profile → Apps → HIIT Coach — or just enter your details manually in Settings."
+                        }
                     }
                 } label: {
                     HStack {
@@ -73,9 +136,10 @@ struct WelcomeView: View {
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
+                    .foregroundStyle(.white)
                 }
-                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
-                .foregroundStyle(.white)
+                .buttonStyle(.plain)
                 .disabled(connecting)
 
                 Button("Skip") { dismiss() }

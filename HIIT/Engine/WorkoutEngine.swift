@@ -12,6 +12,11 @@ import AudioToolbox
 /// because that's when the machine needs ramp time. Slow-downs get no warning
 /// at all — braking early just cuts the effort short — but a finishing work
 /// phase counts itself out with the same beeps and a distinct "done" tone.
+///
+/// Beep timing: countdown tones are pre-scheduled a fraction of a second ahead
+/// on the audio engine's own clock (compensating for tick granularity and the
+/// output route's latency) so they land exactly as the on-screen number ticks
+/// over. Haptics fire from the timer tick that crosses the same boundary.
 @Observable
 final class WorkoutEngine {
 
@@ -51,6 +56,14 @@ final class WorkoutEngine {
     /// Read by the live kcal/distance estimate so skipped phases count correctly.
     private(set) var actualSeconds: [Double]
     private var lastBeepSecond = -1
+    /// Marks whose tone has been handed to the audio engine this phase.
+    private var scheduledBeeps: Set<Int> = []
+    /// Marks whose scheduling failed — play the system-sound fallback instead.
+    private var fallbackBeeps: Set<Int> = []
+    /// True once this phase's GO/done tone is queued on the audio clock.
+    private var endToneScheduled = false
+    /// How far ahead a tick may pre-schedule audio; just over one tick interval.
+    private let audioLookahead = 0.15
     private var hrSum = 0.0
     private var hrCount = 0.0
     private var workHRSum = 0.0
@@ -261,12 +274,46 @@ final class WorkoutEngine {
         phaseElapsed = Date().timeIntervalSince(phaseStart)
         let remaining = currentPhase.seconds - phaseElapsed
 
-        if remaining > 0 {
+        if remaining > 0 && !inOvertime {
             let schedule = beepSchedule
+            // Hand each countdown tone to the audio clock just before its
+            // boundary so it plays exactly as the displayed second flips.
+            if soundOn {
+                for mark in schedule where !scheduledBeeps.contains(mark) {
+                    let untilMark = remaining - Double(mark)
+                    if untilMark <= audioLookahead {
+                        scheduledBeeps.insert(mark)
+                        if !TonePlayer.shared.play(.low, after: max(0, untilMark)) {
+                            fallbackBeeps.insert(mark)
+                        }
+                    }
+                }
+                // Same for the phase-end tone (GO into a harder phase, or the
+                // "done" tone that ends a counted-out effort).
+                if !endToneScheduled, remaining <= audioLookahead {
+                    let tone: TonePlayer.Tone?
+                    switch phaseEndCue {
+                    case .rampUp: tone = .high
+                    case .effortDone: tone = .done
+                    case .none: tone = nil
+                    }
+                    if let tone {
+                        endToneScheduled = TonePlayer.shared.play(tone, after: max(0, remaining))
+                    }
+                }
+            }
+            // Haptics (and the system-sound fallback) fire on the tick that
+            // crosses the mark — in step with the on-screen countdown.
             let s = Int(remaining.rounded(.up))
             if s != lastBeepSecond && schedule.contains(s) {
                 lastBeepSecond = s
-                cue(.tick)
+                if hapticsOn {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+                if soundOn && fallbackBeeps.contains(s) {
+                    fallbackBeeps.remove(s)
+                    AudioServicesPlaySystemSound(1103)
+                }
             }
         }
         if remaining <= 0 && !inOvertime {
@@ -284,6 +331,10 @@ final class WorkoutEngine {
     private func advance(auto: Bool, overshoot: Double) {
         actualSeconds[phaseIndex] = auto ? currentPhase.seconds : min(phaseElapsed, currentPhase.seconds)
         lastBeepSecond = -1
+        scheduledBeeps.removeAll()
+        fallbackBeeps.removeAll()
+        let endToneAlreadyPlayed = endToneScheduled
+        endToneScheduled = false
         let leavingKind = currentPhase.kind
         let endCue = phaseEndCue
         if phaseIndex + 1 >= plan.phases.count {
@@ -293,19 +344,51 @@ final class WorkoutEngine {
             return
         }
         phaseIndex += 1
-        // Leaving a hard effort with fresh HR data: anchor a 1-minute
-        // heart-rate-recovery measurement (a well-studied fitness marker).
-        if leavingKind == .work && currentPhase.kind != .work,
-           let hr = latestHR, let hrDate = latestHRDate,
-           Date().timeIntervalSince(hrDate) < 15 {
+        // A new work phase closes any pending heart-rate-recovery window —
+        // samples from here on would measure the new effort, not the drop.
+        if currentPhase.kind == .work {
+            recoveryAnchor = nil
+        } else if leavingKind == .work,
+                  let hr = latestHR, let hrDate = latestHRDate,
+                  Date().timeIntervalSince(hrDate) < 15 {
+            // Leaving a hard effort with fresh HR data: anchor a 1-minute
+            // heart-rate-recovery measurement (a well-studied fitness marker).
             recoveryAnchor = (Date(), hr)
         }
-        let carry = max(0, min(overshoot, 1))
+        // If the app was suspended (screen locked, another app foregrounded)
+        // the timer stopped firing and the overshoot can span whole phases.
+        // Walk the wall-clock gap through the plan so no time is lost: each
+        // fully-covered phase is credited at its planned duration and the
+        // workout lands mid-phase exactly where the clock says it should.
+        var carry = auto ? max(0, overshoot) : 0
+        var walkedPhases = false
+        while carry >= currentPhase.seconds {
+            actualSeconds[phaseIndex] = currentPhase.seconds
+            carry -= currentPhase.seconds
+            walkedPhases = true
+            recoveryAnchor = nil
+            if phaseIndex + 1 >= plan.phases.count {
+                // The gap ran past the end of the plan — straight to overtime,
+                // with the leftover carry counted as overtime seconds.
+                inOvertime = true
+                phaseStart = Date().addingTimeInterval(-(currentPhase.seconds + carry))
+                phaseElapsed = currentPhase.seconds + carry
+                cue(.finish)
+                return
+            }
+            phaseIndex += 1
+        }
         phaseStart = Date().addingTimeInterval(-carry)
         phaseElapsed = carry
+        if walkedPhases {
+            // Catching up after a suspension: one neutral cue, not a replay
+            // of every skipped transition.
+            cue(.phaseChange)
+            return
+        }
         switch endCue {
-        case .rampUp: cue(.go)
-        case .effortDone: cue(.done)
+        case .rampUp: cue(.go, skipSound: endToneAlreadyPlayed)
+        case .effortDone: cue(.done, skipSound: endToneAlreadyPlayed)
         case .none: cue(.phaseChange)
         }
     }
@@ -401,7 +484,9 @@ final class WorkoutEngine {
 
     private enum Cue { case tick, go, done, phaseChange, finish }
 
-    private func cue(_ kind: Cue) {
+    /// Plays the haptic and, unless the tone was already pre-scheduled on the
+    /// audio clock, the matching sound (with a system-sound fallback).
+    private func cue(_ kind: Cue, skipSound: Bool = false) {
         if hapticsOn {
             switch kind {
             case .tick:
@@ -414,7 +499,7 @@ final class WorkoutEngine {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             }
         }
-        if soundOn {
+        if soundOn && !skipSound {
             let tone: TonePlayer.Tone
             switch kind {
             case .tick, .phaseChange: tone = .low
@@ -432,14 +517,65 @@ final class WorkoutEngine {
     // MARK: - Result
 
     func makeResult(machine: MachineProfile, weightKg: Double?) -> SessionResult {
+        Self.buildResult(
+            plan: plan,
+            startDate: startDate,
+            endDate: endDate,
+            appliedTargets: appliedTargets,
+            actualSeconds: actualSeconds,
+            machine: machine,
+            weightKg: weightKg,
+            avgHeartRate: hrCount > 0 ? hrSum / hrCount : nil,
+            maxHeartRate: maxObservedHR,
+            avgWorkHeartRate: workHRCount > 0 ? workHRSum / workHRCount : nil,
+            hrRecovery: hrRecovery,
+            heartRateSamples: storedHRSamples,
+            endedEarly: endedEarly)
+    }
+
+    /// Snapshot of everything needed to rebuild a saveable result — written
+    /// to disk during the session so a crash or jetsam can't lose the workout.
+    func makeCheckpoint() -> WorkoutCheckpoint {
+        var actuals = actualSeconds
+        if state != .finished, plan.phases.indices.contains(phaseIndex) {
+            actuals[phaseIndex] = inOvertime ? phaseElapsed : min(phaseElapsed, currentPhase.seconds)
+        }
+        return WorkoutCheckpoint(
+            plan: plan,
+            startDate: startDate,
+            savedAt: Date(),
+            appliedTargets: appliedTargets,
+            actualSeconds: actuals,
+            avgHeartRate: hrCount > 0 ? hrSum / hrCount : nil,
+            maxHeartRate: maxObservedHR,
+            avgWorkHeartRate: workHRCount > 0 ? workHRSum / workHRCount : nil,
+            hrRecovery: hrRecovery,
+            heartRateSamples: storedHRSamples)
+    }
+
+    /// Assembles a SessionResult from raw session state — shared between the
+    /// live engine and checkpoint recovery so both produce identical math.
+    static func buildResult(plan: WorkoutPlan,
+                            startDate: Date,
+                            endDate: Date,
+                            appliedTargets: [PhaseTarget],
+                            actualSeconds: [Double],
+                            machine: MachineProfile,
+                            weightKg: Double?,
+                            avgHeartRate: Double?,
+                            maxHeartRate: Double?,
+                            avgWorkHeartRate: Double?,
+                            hrRecovery: Double?,
+                            heartRateSamples: [HRSample],
+                            endedEarly: Bool) -> SessionResult {
         var records: [PhaseRecord] = []
         for (i, phase) in plan.phases.enumerated() {
-            let target = appliedTargets[i]
+            let target = i < appliedTargets.count ? appliedTargets[i] : phase.target
             records.append(PhaseRecord(
                 kind: phase.kind.rawValue,
                 label: phase.label,
                 plannedSeconds: phase.seconds,
-                actualSeconds: actualSeconds[i],
+                actualSeconds: i < actualSeconds.count ? actualSeconds[i] : 0,
                 speedMph: target.speedMph,
                 inclinePercent: target.inclinePercent,
                 resistance: target.resistance))
@@ -450,19 +586,20 @@ final class WorkoutEngine {
         var workSecs = 0.0
         var total = 0.0
         for (i, phase) in plan.phases.enumerated() {
-            total += actualSeconds[i]
+            let actual = records[i].actualSeconds
+            total += actual
             if phase.kind == .work {
-                workSecs += actualSeconds[i]
-                if actualSeconds[i] >= phase.seconds * 0.9 { completedWork += 1 }
+                workSecs += actual
+                if actual >= phase.seconds * 0.9 { completedWork += 1 }
             }
         }
 
         // Express any manual override in "progression levels" so the next
         // session starts where the user actually trained. The generator adds
-        // 0.2 mph (or ~1.5% of max resistance) per level.
+        // 0.2 mph (or 1.5% of max resistance) per level.
         var overrideSum = 0.0
         var overrideCount = 0.0
-        for (i, phase) in plan.phases.enumerated() where phase.kind == .work {
+        for (i, phase) in plan.phases.enumerated() where phase.kind == .work && i < appliedTargets.count {
             if plan.equipment == .bike {
                 if let applied = appliedTargets[i].resistance, let planned = phase.target.resistance {
                     overrideSum += Double(applied - planned)
@@ -476,7 +613,11 @@ final class WorkoutEngine {
         let overrideAvg = overrideCount > 0 ? overrideSum / overrideCount : 0
         let overrideLevels: Double
         if plan.equipment == .bike {
-            overrideLevels = overrideAvg / max(1.0, 0.015 * Double(machine.maxResistance))
+            // One generator level is worth 0.015 × maxResistance resistance
+            // units, so divide by that step (floored well below one unit —
+            // flooring at 1.0 silently swallowed overrides on every bike with
+            // 32 levels or fewer). ProgressionEngine clamps the credit to ±2.
+            overrideLevels = overrideAvg / max(0.12, 0.015 * Double(machine.maxResistance))
         } else {
             overrideLevels = overrideAvg / 0.2
         }
@@ -489,12 +630,12 @@ final class WorkoutEngine {
             completedWorkIntervals: completedWork,
             workSeconds: workSecs,
             totalSeconds: total,
-            avgHeartRate: hrCount > 0 ? hrSum / hrCount : nil,
-            maxHeartRate: maxObservedHR,
-            avgWorkHeartRate: workHRCount > 0 ? workHRSum / workHRCount : nil,
+            avgHeartRate: avgHeartRate,
+            maxHeartRate: maxHeartRate,
+            avgWorkHeartRate: avgWorkHeartRate,
             hrRecovery: hrRecovery,
             workOverrideLevels: overrideLevels,
-            heartRateSamples: storedHRSamples,
+            heartRateSamples: heartRateSamples,
             estimatedCalories: estimate.kcal,
             estimatedDistanceMeters: estimate.meters,
             endedEarly: endedEarly)

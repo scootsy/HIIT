@@ -11,7 +11,6 @@ struct HistoryView: View {
     @State private var coachSummary = ""
     @State private var vo2Series: [HealthKitManager.SamplePoint] = []
     @State private var restingSeries: [HealthKitManager.SamplePoint] = []
-    @State private var fitnessLoaded = false
 
     var body: some View {
         NavigationStack {
@@ -82,10 +81,11 @@ struct HistoryView: View {
                 CoachSheetView(summary: coachSummary)
             }
             .task {
-                guard !fitnessLoaded else { return }
+                // Refetch on every visit (two cheap, bounded queries) so the
+                // trends appear as soon as Health access is granted — a
+                // one-shot latch used to hide them until the next app launch.
                 vo2Series = await health.fetchSeries(.vo2Max, unit: HealthKitManager.vo2MaxUnit, daysBack: 180)
                 restingSeries = await health.fetchSeries(.restingHeartRate, unit: HealthKitManager.bpmUnit, daysBack: 180)
-                fitnessLoaded = true
             }
         }
     }
@@ -262,7 +262,7 @@ struct SessionDetailView: View {
                     if let recovery = session.hrRecovery {
                         StatTile(title: "HR recovery",
                                  value: "−\(Int(recovery)) bpm",
-                                 subtitle: "1-min drop after last effort")
+                                 subtitle: "1-min drop after a hard effort")
                     }
                 }
 

@@ -19,6 +19,32 @@ struct AppSettings: Codable {
     var hrMonitorID: String? = nil
     var hrMonitorName: String? = nil
     var experienceSetOnce: Bool? = nil
+
+    init() {}
+
+    // Field-by-field decoding so a blob written by a different app version
+    // (fields added, renamed, or removed) degrades to per-field defaults
+    // instead of throwing and silently resetting every setting.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        useMetric = (try? c.decodeIfPresent(Bool.self, forKey: .useMetric)) ?? false
+        age = try? c.decodeIfPresent(Int.self, forKey: .age)
+        weightKg = try? c.decodeIfPresent(Double.self, forKey: .weightKg)
+        heightCm = try? c.decodeIfPresent(Double.self, forKey: .heightCm)
+        restingHR = try? c.decodeIfPresent(Double.self, forKey: .restingHR)
+        maxHROverride = try? c.decodeIfPresent(Double.self, forKey: .maxHROverride)
+        experienceRaw = (try? c.decodeIfPresent(String.self, forKey: .experienceRaw)) ?? ExperienceLevel.beginner.rawValue
+        preferLowImpact = (try? c.decodeIfPresent(Bool.self, forKey: .preferLowImpact)) ?? false
+        soundOn = (try? c.decodeIfPresent(Bool.self, forKey: .soundOn)) ?? true
+        hapticsOn = (try? c.decodeIfPresent(Bool.self, forKey: .hapticsOn)) ?? true
+        machines = (try? c.decodeIfPresent([String: MachineProfile].self, forKey: .machines)) ?? [:]
+        lastEquipmentRaw = try? c.decodeIfPresent(String.self, forKey: .lastEquipmentRaw)
+        healthConnected = (try? c.decodeIfPresent(Bool.self, forKey: .healthConnected)) ?? false
+        lastHealthSync = try? c.decodeIfPresent(Date.self, forKey: .lastHealthSync)
+        hrMonitorID = try? c.decodeIfPresent(String.self, forKey: .hrMonitorID)
+        hrMonitorName = try? c.decodeIfPresent(String.self, forKey: .hrMonitorName)
+        experienceSetOnce = try? c.decodeIfPresent(Bool.self, forKey: .experienceSetOnce)
+    }
 }
 
 @Observable
@@ -30,9 +56,15 @@ final class SettingsStore {
     }
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: Self.key),
-           let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
-            value = decoded
+        if let data = UserDefaults.standard.data(forKey: Self.key) {
+            if let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
+                value = decoded
+            } else {
+                // Keep the unreadable blob around instead of letting the next
+                // persist() overwrite it — the data may be recoverable.
+                UserDefaults.standard.set(data, forKey: Self.key + ".backup")
+                value = AppSettings()
+            }
         } else {
             value = AppSettings()
         }
@@ -96,12 +128,28 @@ final class SettingsStore {
         return String(format: "%.2f mi", meters / 1609.34)
     }
 
-    func apply(_ snapshot: HealthKitManager.ProfileSnapshot) {
+    /// Applies a Health profile snapshot. Returns false when the snapshot was
+    /// completely empty — HealthKit reports denied read access as "no data",
+    /// so an all-nil snapshot must NOT flip the app into connected mode (that
+    /// would hide manual entry with nothing to show in its place).
+    @discardableResult
+    func apply(_ snapshot: HealthKitManager.ProfileSnapshot) -> Bool {
         if let age = snapshot.age { value.age = age }
         if let weight = snapshot.weightKg { value.weightKg = weight }
         if let height = snapshot.heightCm { value.heightCm = height }
         if let resting = snapshot.restingHR { value.restingHR = resting }
-        value.healthConnected = true
-        value.lastHealthSync = Date()
+        let gotData = snapshot.age != nil || snapshot.weightKg != nil
+            || snapshot.heightCm != nil || snapshot.restingHR != nil
+        if gotData {
+            value.healthConnected = true
+            value.lastHealthSync = Date()
+        }
+        return gotData
+    }
+
+    /// Back to manual mode; already-synced values stay editable in place.
+    func disconnectHealth() {
+        value.healthConnected = false
+        value.lastHealthSync = nil
     }
 }

@@ -28,9 +28,11 @@ enum CoachService {
         You are not a medical professional; if anything in the data looks concerning, suggest they check with one.
         """
 
+        // max_tokens caps the model's thinking plus the visible reply on this
+        // model, so leave generous headroom over the short reply we expect.
         let body: [String: Any] = [
             "model": "claude-opus-5",
-            "max_tokens": 4000,
+            "max_tokens": 6000,
             "output_config": ["effort": "low"],
             "system": system,
             "messages": [["role": "user", "content": summary]],
@@ -46,7 +48,8 @@ enum CoachService {
             let apiMessage = ((json?["error"] as? [String: Any])?["message"] as? String)
             throw CoachError(message: apiMessage ?? "Request failed (HTTP \(http.statusCode))")
         }
-        if let stop = json?["stop_reason"] as? String, stop == "refusal" {
+        let stopReason = json?["stop_reason"] as? String
+        if stopReason == "refusal" {
             throw CoachError(message: "The model declined this request. Please try again.")
         }
         let text = (json?["content"] as? [[String: Any]])?
@@ -54,7 +57,13 @@ enum CoachService {
             .compactMap { $0["text"] as? String }
             .joined(separator: "\n") ?? ""
         guard !text.isEmpty else {
-            throw CoachError(message: "Empty response — please try again.")
+            throw CoachError(message: stopReason == "max_tokens"
+                ? "The reply ran out of room — please try again."
+                : "Empty response — please try again.")
+        }
+        // Don't render a mid-sentence cutoff as if it were the whole reply.
+        if stopReason == "max_tokens" {
+            return text + "\n\n(The reply was cut short.)"
         }
         return text
     }

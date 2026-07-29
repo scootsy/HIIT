@@ -10,7 +10,7 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 
 **Tell it who you are.** Connect Apple Health and it pulls your age, weight, height, and resting heart rate to set heart-rate zones (Tanaka formula), calibrate starting intensity, and improve calorie estimates. Or enter things manually — everything degrades gracefully.
 
-**It builds the session.** Pick a duration (10–60 min) and a feel ("Coach's pick", "Push me", "Easier today") and the generator assembles a warm-up, a research-based interval protocol, and a cool-down that exactly fills your time budget:
+**It builds the session.** Pick a duration (8–60 min) and a feel ("Coach's pick", "Push me", "Easier today") and the generator assembles a warm-up, a research-based interval protocol, and a cool-down that exactly fills your time budget:
 
 | Protocol | Source | When you'll see it |
 |---|---|---|
@@ -27,7 +27,7 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 
 **It remembers.** History with per-phase breakdowns, a weekly-minutes trend chart, and automatic export of every workout (duration, estimated calories, distance) to Apple Health. It also tracks the fitness signals a coach would actually watch: **Cardio Fitness (VO₂max)** and **resting heart rate** trends pulled from Health, plus **1-minute heart-rate recovery** measured automatically after your last hard interval whenever live HR is available.
 
-**Optional AI coach.** Add your own Anthropic API key in Settings and get short, concrete feedback on your recent training after any workout. The key is stored in the device Keychain and requests go directly from your phone to Anthropic — no middleman.
+**Optional AI coach.** Add your own Anthropic API key in Settings and get short, concrete feedback on your recent training after any workout. The key is stored in the device Keychain and requests go directly from your phone to Anthropic — no middleman. Each request contains your profile numbers (age, weight, resting HR), recent session stats, and any workout notes you wrote — nothing else leaves the device, and only when you tap the coach button.
 
 ## Requirements
 

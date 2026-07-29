@@ -5,16 +5,25 @@ import Foundation
 enum MetabolicMath {
 
     /// ACSM walking/running VO₂ equations, converted to METs.
-    /// Walking (< 3.7 mph): VO₂ = 0.1·v + 1.8·v·grade + 3.5
-    /// Running (≥ 3.7 mph): VO₂ = 0.2·v + 0.9·v·grade + 3.5   (v in m/min)
+    /// Walking (≤ 3.7 mph): VO₂ = 0.1·v + 1.8·v·grade + 3.5
+    /// Running (≥ 5.0 mph): VO₂ = 0.2·v + 0.9·v·grade + 3.5   (v in m/min)
+    /// The equations are blended between 3.7 and 5.0 mph: each is only
+    /// validated on its own side, a hard cutover nearly doubled the live
+    /// kcal rate on a +0.1 mph nudge, and the brisk-walk band in between
+    /// (where low-impact incline walking lives) was scored as running.
     static func treadmillMETs(speedMph: Double, inclinePercent: Double) -> Double {
         let mPerMin = speedMph * 26.8224
         let grade = max(0, inclinePercent) / 100
+        let walk = 0.1 * mPerMin + 1.8 * mPerMin * grade + 3.5
+        let run = 0.2 * mPerMin + 0.9 * mPerMin * grade + 3.5
         let vo2: Double
-        if speedMph < 3.7 {
-            vo2 = 0.1 * mPerMin + 1.8 * mPerMin * grade + 3.5
+        if speedMph <= 3.7 {
+            vo2 = walk
+        } else if speedMph >= 5.0 {
+            vo2 = run
         } else {
-            vo2 = 0.2 * mPerMin + 0.9 * mPerMin * grade + 3.5
+            let t = (speedMph - 3.7) / (5.0 - 3.7)
+            vo2 = walk * (1 - t) + run * t
         }
         return vo2 / 3.5
     }

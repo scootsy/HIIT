@@ -257,12 +257,15 @@ struct SetupView: View {
                             shuffleOffset += 1
                             buildPlan()
                         } label: {
+                            // Styling inside the label keeps the whole bar
+                            // tappable — outside a .plain button, only the
+                            // text itself would respond.
                             Label("Mix it up", systemImage: "shuffle")
                                 .font(.subheadline.weight(.medium))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 10)
+                                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                         }
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                         .buttonStyle(.plain)
 
                         Button {
@@ -272,9 +275,9 @@ struct SetupView: View {
                                 .font(.headline)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
+                                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
+                                .foregroundStyle(.white)
                         }
-                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
-                        .foregroundStyle(.white)
                         .buttonStyle(.plain)
                     }
                     .padding()
@@ -312,13 +315,19 @@ struct SetupView: View {
         }
         settings.value.lastEquipmentRaw = equipment.rawValue
         let progress = fetchProgress()
+        // After a long break the accumulated level tapers off, so a returning
+        // user eases back in instead of resuming at full pre-break targets.
+        let daysSince = progress?.lastSessionDate.map {
+            Calendar.current.dateComponents([.day], from: $0, to: Date()).day ?? 0
+        }
+        let effectiveLevel = ProgressionEngine.decayedLevel(progress?.level ?? 0, daysSince: daysSince)
         let input = GeneratorInput(
             equipment: equipment,
             machine: machine,
             level: level,
             minutes: minutes,
             vibe: vibe,
-            progression: progress?.level ?? 0,
+            progression: effectiveLevel,
             sessionCount: (progress?.sessionsCompleted ?? 0) + shuffleOffset,
             hardSessionsSinceEasy: progress?.hardSessionsSinceEasy ?? 0,
             maxHR: settings.maxHR,

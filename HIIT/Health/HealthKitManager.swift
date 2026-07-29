@@ -54,7 +54,7 @@ final class HealthKitManager {
         for id in readIDs {
             if let type = quantityType(id) { read.insert(type) }
         }
-        let shareIDs: [HKQuantityTypeIdentifier] = [.activeEnergyBurned, .distanceWalkingRunning, .distanceCycling, .heartRate]
+        let shareIDs: [HKQuantityTypeIdentifier] = [.activeEnergyBurned, .distanceWalkingRunning, .heartRate]
         for id in shareIDs {
             if let type = quantityType(id) { share.insert(type) }
         }
@@ -160,8 +160,20 @@ final class HealthKitManager {
 
     // MARK: - Saving workouts
 
-    func saveWorkout(result: SessionResult) async -> Bool {
-        guard Self.isAvailable else { return false }
+    enum WorkoutSaveOutcome {
+        case saved
+        /// Authorized but the save failed — worth telling the user about.
+        case failed
+        /// Sharing was never granted (user skipped or denied Health) — the
+        /// summary shouldn't dress an expected state up as an error.
+        case notAuthorized
+    }
+
+    func saveWorkout(result: SessionResult) async -> WorkoutSaveOutcome {
+        guard Self.isAvailable else { return .notAuthorized }
+        guard store.authorizationStatus(for: HKObjectType.workoutType()) == .sharingAuthorized else {
+            return .notAuthorized
+        }
         let configuration = HKWorkoutConfiguration()
         switch result.plan.equipment {
         case .bike:
@@ -207,9 +219,9 @@ final class HealthKitManager {
             try await builder.addMetadata([HKMetadataKeyIndoorWorkout: result.plan.equipment != .outdoor])
             try await builder.endCollection(at: result.endDate)
             _ = try await builder.finishWorkout()
-            return true
+            return .saved
         } catch {
-            return false
+            return .failed
         }
     }
 }

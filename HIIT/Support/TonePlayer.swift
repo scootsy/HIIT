@@ -28,6 +28,8 @@ final class TonePlayer {
 
     private init() {}
 
+    var isActive: Bool { active }
+
     func prepare() {
         guard !active else { return }
         let session = AVAudioSession.sharedInstance()
@@ -57,18 +59,41 @@ final class TonePlayer {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
-    /// Returns false when the tone couldn't be played (engine never started,
-    /// or was killed by an interruption and won't restart) so the caller can
-    /// fall back to a system sound.
+    /// Returns false when the tone couldn't be played so the caller can fall
+    /// back to a system sound. A failed initial `prepare()` (e.g. a workout
+    /// started during a phone call) is retried here, so cues recover as soon
+    /// as the audio session becomes available again instead of staying silent
+    /// for the whole session.
     @discardableResult
     func play(_ tone: Tone) -> Bool {
+        play(tone, after: 0)
+    }
+
+    /// Schedules a tone `delay` seconds from now on the audio engine's own
+    /// sample clock, compensated for the output route's latency (Bluetooth
+    /// earbuds add 150–300 ms) — so countdown beeps land exactly on their
+    /// boundary instead of audibly trailing the on-screen number.
+    @discardableResult
+    func play(_ tone: Tone, after delay: TimeInterval) -> Bool {
+        if !active { prepare() }
         guard active, let buffer = buffers[tone] else { return false }
         if !engine.isRunning {
             // A phone call or Siri stopped the engine; pick back up.
             guard (try? engine.start()) != nil else { return false }
             player.play()
         }
-        player.scheduleBuffer(buffer, completionHandler: nil)
+        let latency = AVAudioSession.sharedInstance().outputLatency
+        let lead = delay - latency
+        if lead > 0.01,
+           let nodeTime = player.lastRenderTime,
+           let playerTime = player.playerTime(forNodeTime: nodeTime) {
+            let target = AVAudioTime(
+                sampleTime: playerTime.sampleTime + AVAudioFramePosition(lead * format.sampleRate),
+                atRate: format.sampleRate)
+            player.scheduleBuffer(buffer, at: target, options: [], completionHandler: nil)
+        } else {
+            player.scheduleBuffer(buffer, completionHandler: nil)
+        }
         if !player.isPlaying { player.play() }
         return true
     }

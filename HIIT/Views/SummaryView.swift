@@ -12,7 +12,8 @@ struct SummaryView: View {
     @State private var rpe: Int? = nil
     @State private var notes = ""
     @State private var saved = false
-    @State private var healthSaved: Bool? = nil
+    @State private var confirmDiscard = false
+    @State private var healthSaved: HealthKitManager.WorkoutSaveOutcome? = nil
     @State private var nextNote = ""
     @State private var showCoach = false
     @State private var coachSummary = ""
@@ -46,6 +47,15 @@ struct SummaryView: View {
         }
         .sheet(isPresented: $showCoach) {
             CoachSheetView(summary: coachSummary)
+        }
+        .confirmationDialog("Discard this workout?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button("Discard workout", role: .destructive) {
+                WorkoutCheckpoint.clear()
+                onDone()
+            }
+            Button("Keep", role: .cancel) {}
+        } message: {
+            Text("The session won't be saved to your history.")
         }
     }
 
@@ -85,7 +95,7 @@ struct SummaryView: View {
             if let recovery = r.hrRecovery {
                 StatTile(title: "HR recovery",
                          value: "−\(Int(recovery)) bpm",
-                         subtitle: "1-min drop after last effort")
+                         subtitle: "1-min drop after a hard effort")
             }
         }
     }
@@ -95,16 +105,19 @@ struct SummaryView: View {
             Button {
                 save()
             } label: {
+                // Styling lives inside the label so the whole bar is
+                // tappable, not just the word (the old pattern left dead
+                // flanks that read as a broken button).
                 Text("Save workout")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
+                    .foregroundStyle(.white)
             }
-            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
-            .foregroundStyle(.white)
             .buttonStyle(.plain)
 
-            Button("Discard", role: .destructive) { onDone() }
+            Button("Discard", role: .destructive) { confirmDiscard = true }
                 .font(.subheadline)
         }
     }
@@ -126,12 +139,20 @@ struct SummaryView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
 
-            if let healthSaved {
-                Label(healthSaved ? "Saved to Apple Health" : "Couldn't save to Apple Health",
-                      systemImage: healthSaved ? "heart.circle.fill" : "exclamationmark.circle")
+            switch healthSaved {
+            case .saved?:
+                Label("Saved to Apple Health", systemImage: "heart.circle.fill")
                     .font(.footnote)
-                    .foregroundStyle(healthSaved ? Theme.recover : .secondary)
-            } else {
+                    .foregroundStyle(Theme.recover)
+            case .failed?:
+                Label("Couldn't save to Apple Health — check sharing under Health → Profile → Apps",
+                      systemImage: "exclamationmark.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            case .notAuthorized?:
+                // Health was never connected — an expected state, not an error.
+                EmptyView()
+            case nil:
                 Label("Saving to Apple Health…", systemImage: "heart.circle")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -145,8 +166,8 @@ struct SummaryView: View {
                         .font(.subheadline.weight(.medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                 }
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                 .buttonStyle(.plain)
             }
 
@@ -157,83 +178,34 @@ struct SummaryView: View {
                     .font(.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
+                    .foregroundStyle(.white)
             }
-            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
-            .foregroundStyle(.white)
             .buttonStyle(.plain)
         }
     }
 
     private func save() {
-        let r = result
-        let session = WorkoutSession(result: r)
-        session.rpe = rpe
-        session.notes = notes
-
-        let completion = r.plan.workPhaseCount > 0
-            ? Double(r.completedWorkIntervals) / Double(r.plan.workPhaseCount)
-            : 1
-        var hrPercent: Double? = nil
-        if let maxHR = settings.maxHR, let avgWork = r.avgWorkHeartRate {
-            hrPercent = avgWork / maxHR * 100
-        }
-
-        let progress = fetchOrCreateProgress(for: r.plan.equipment)
-        let update = ProgressionEngine.evaluate(
-            currentLevel: progress.level,
-            rpe: rpe,
-            completionRatio: completion,
-            avgWorkHRPercent: hrPercent,
-            workOverrideLevels: r.workOverrideLevels)
-        progress.level = update.newLevel
-        progress.sessionsCompleted += 1
-        progress.lastSessionDate = r.endDate
-        if r.plan.vibe == .easy || r.plan.name.contains("Recovery") {
-            progress.hardSessionsSinceEasy = 0
-        } else {
-            progress.hardSessionsSinceEasy += 1
-        }
-
-        // Sustained performance moves the experience tier itself; rebasing
-        // every equipment's level keeps targets continuous across the change.
-        var note = update.note
-        if let change = ProgressionEngine.tierChange(experience: settings.experience, progressLevel: progress.level) {
-            settings.experience = change.newExperience
-            let delta = progress.level >= ProgressionEngine.tierLevelSpan
-                ? -ProgressionEngine.tierLevelSpan
-                : ProgressionEngine.tierLevelSpan
-            let allProgress = (try? context.fetch(FetchDescriptor<EquipmentProgress>())) ?? []
-            for entry in allProgress {
-                entry.level += delta
-            }
-            note = change.note
-        }
-        session.nextTimeNote = note
-        nextNote = note
-
-        context.insert(session)
-        try? context.save()
+        // A double-registered tap must not insert the session twice and
+        // advance progression twice.
+        guard !saved else { return }
         saved = true
 
-        coachSummary = "The user just finished this session — give feedback with it in mind.\n"
-            + CoachService.buildSummary(sessions: [session], settings: settings)
+        let r = result
+        let outcome = SessionSaver.save(result: r, rpe: rpe, notes: notes,
+                                        context: context, settings: settings)
+        nextNote = outcome.note
 
-        Task {
+        coachSummary = "The user just finished this session — give feedback with it in mind.\n"
+            + CoachService.buildSummary(sessions: [outcome.session], settings: settings)
+
+        let session = outcome.session
+        Task { @MainActor in
             let ok = await health.saveWorkout(result: r)
             healthSaved = ok
-            session.savedToHealth = ok
+            session.savedToHealth = (ok == .saved)
             try? context.save()
         }
-    }
-
-    private func fetchOrCreateProgress(for equipment: Equipment) -> EquipmentProgress {
-        let all = (try? context.fetch(FetchDescriptor<EquipmentProgress>())) ?? []
-        if let existing = all.first(where: { $0.equipmentRaw == equipment.rawValue }) {
-            return existing
-        }
-        let fresh = EquipmentProgress(equipmentRaw: equipment.rawValue)
-        context.insert(fresh)
-        return fresh
     }
 }
 

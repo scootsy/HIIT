@@ -8,6 +8,8 @@ struct HRMonitorSheet: View {
     @Environment(SettingsStore.self) private var settings
     @Environment(BluetoothHeartRateManager.self) private var ble
     @Environment(\.dismiss) private var dismiss
+    /// The row the user tapped; remembered in settings only once it connects.
+    @State private var pendingMonitor: BluetoothHeartRateManager.DiscoveredMonitor? = nil
 
     var body: some View {
         NavigationStack {
@@ -38,6 +40,16 @@ struct HRMonitorSheet: View {
             // Don't tear down a connection the live workout screen is using.
             if !ble.workoutActive {
                 ble.disconnect()
+            }
+        }
+        // Persist the choice only after the connection succeeds — a mis-tap
+        // on a neighbor's strap in a busy gym must not become the device
+        // every future workout silently tries to reach.
+        .onChange(of: ble.isConnected) { _, connected in
+            if connected, let monitor = pendingMonitor {
+                settings.value.hrMonitorID = monitor.id.uuidString
+                settings.value.hrMonitorName = monitor.name
+                pendingMonitor = nil
             }
         }
     }
@@ -113,8 +125,7 @@ struct HRMonitorSheet: View {
                 }
                 ForEach(ble.discovered) { monitor in
                     Button {
-                        settings.value.hrMonitorID = monitor.id.uuidString
-                        settings.value.hrMonitorName = monitor.name
+                        pendingMonitor = monitor
                         ble.connect(to: monitor.id, name: monitor.name)
                     } label: {
                         HStack {
@@ -124,7 +135,7 @@ struct HRMonitorSheet: View {
                                 Text(monitor.name)
                                     .font(.subheadline.weight(.medium))
                                     .foregroundStyle(.primary)
-                                Text("Tap to connect")
+                                Text(pendingMonitor?.id == monitor.id ? "Connecting…" : "Tap to connect")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

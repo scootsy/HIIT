@@ -157,8 +157,24 @@ extension BluetoothHeartRateManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
+            // Recovering from a Bluetooth power-cycle (Control Center toggle,
+            // Airplane Mode, bluetoothd reset): clear the stale off status
+            // and, if a monitor was in use, re-issue the connection — without
+            // this the status stays "Bluetooth is off" for the rest of the
+            // workout even though Bluetooth is back.
+            if status == .bluetoothOff || status == .unauthorized {
+                status = .idle
+            }
+            if case .none = intent, shouldReconnect, let target = targetID {
+                connectedPeripheral = nil
+                intent = .connectSaved(target)
+            }
             beginIfReady()
         case .poweredOff:
+            // Power-off invalidates peripherals and pending connects.
+            connectedPeripheral = nil
+            latestHR = nil
+            latestHRDate = nil
             status = .bluetoothOff
         case .unauthorized:
             status = .unauthorized

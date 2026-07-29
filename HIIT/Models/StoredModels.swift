@@ -1,6 +1,18 @@
 import Foundation
 import SwiftData
 
+/// Versioned schema so future model changes can ship a proper migration
+/// stage instead of crashing existing installs at launch.
+enum HIITSchemaV1: VersionedSchema {
+    static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
+    static var models: [any PersistentModel.Type] { [WorkoutSession.self, EquipmentProgress.self] }
+}
+
+enum HIITMigrationPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] { [HIITSchemaV1.self] }
+    static var stages: [MigrationStage] { [] }
+}
+
 @Model
 final class WorkoutSession {
     var id: UUID = UUID()

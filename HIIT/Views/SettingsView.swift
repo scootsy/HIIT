@@ -9,7 +9,7 @@ struct SettingsView: View {
     @Environment(SettingsStore.self) private var settings
     @Environment(HealthKitManager.self) private var health
     @State private var apiKey = KeychainHelper.load() ?? ""
-    @State private var keySaved = false
+    @State private var keySaveResult: Bool? = nil
     @State private var refreshing = false
     @State private var healthError: String? = nil
     @State private var editingField: ProfileField? = nil
@@ -65,15 +65,14 @@ struct SettingsView: View {
                     SecureField("Anthropic API key (sk-ant-…)", text: $apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Button(keySaved ? "Saved ✓" : "Save key") {
-                        KeychainHelper.save(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
-                        keySaved = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { keySaved = false }
+                    Button(keySaveLabel) {
+                        keySaveResult = KeychainHelper.save(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { keySaveResult = nil }
                     }
                 } header: {
                     Text("AI Coach (optional)")
                 } footer: {
-                    Text("Key stays in the device Keychain, sent only to Anthropic. Get one at console.anthropic.com.")
+                    Text("Key stays in the device Keychain, sent only to Anthropic. Coach requests include your profile numbers (age, weight, resting HR), recent session stats, and your workout notes. Get a key at console.anthropic.com.")
                 }
 
                 Section {
@@ -103,17 +102,38 @@ struct SettingsView: View {
         }
     }
 
+    private var keySaveLabel: String {
+        switch keySaveResult {
+        case true?: return "Saved ✓"
+        case false?: return "Couldn't save — try again"
+        case nil: return "Save key"
+        }
+    }
+
     // MARK: - Profile
 
-    /// Connected: values flow one way, Health → app, shown read-only. These
-    /// aren't knobs to fiddle with — age doesn't need a stepper. Manual entry
-    /// (via picker sheets) exists only when Health isn't connected.
+    /// Connected: synced values flow one way, Health → app, shown read-only.
+    /// Values Health didn't provide stay manually editable in place — denying
+    /// a single Health toggle must never lock a field out of the app. Manual
+    /// entry (via picker sheets) is the default when Health isn't connected.
     private var profileSection: some View {
         Section {
             if settings.value.healthConnected {
-                LabeledContent("Age", value: settings.value.age.map(String.init) ?? "—")
-                LabeledContent("Weight", value: settings.weightString())
-                LabeledContent("Resting heart rate", value: settings.value.restingHR.map { "\(Int($0)) bpm" } ?? "—")
+                if settings.value.age != nil {
+                    LabeledContent("Age", value: settings.value.age.map(String.init) ?? "—")
+                } else {
+                    profileRow("Age", value: "Set", field: .age)
+                }
+                if settings.value.weightKg != nil {
+                    LabeledContent("Weight", value: settings.weightString())
+                } else {
+                    profileRow("Weight", value: "Set", field: .weight)
+                }
+                if settings.value.restingHR != nil {
+                    LabeledContent("Resting heart rate", value: settings.value.restingHR.map { "\(Int($0)) bpm" } ?? "—")
+                } else {
+                    profileRow("Resting heart rate", value: "Optional", field: .restingHR)
+                }
                 maxHRRow
                 Button {
                     refreshing = true
@@ -128,6 +148,9 @@ struct SettingsView: View {
                         Spacer()
                         if refreshing { ProgressView() }
                     }
+                }
+                Button("Disconnect Apple Health", role: .destructive) {
+                    settings.disconnectHealth()
                 }
             } else {
                 Button {
@@ -145,7 +168,7 @@ struct SettingsView: View {
             Text("Profile")
         } footer: {
             if settings.value.healthConnected {
-                Text("Synced from Apple Health\(lastSyncText). Edit in the Health app, then refresh.")
+                Text("Synced from Apple Health\(lastSyncText). Edit in the Health app, then refresh — anything Health doesn't provide can be set here.")
             } else {
                 Text("Connect Apple Health to fill this in automatically.")
             }
@@ -189,9 +212,8 @@ struct SettingsView: View {
             return
         }
         let snapshot = await health.fetchProfile()
-        settings.apply(snapshot)
-        if snapshot.age == nil && snapshot.weightKg == nil && snapshot.restingHR == nil {
-            healthError = "Connected, but no profile data came back. If you declined access, allow it under Health → Profile → Apps → HIIT Coach; otherwise add your details to the Health app and refresh."
+        if !settings.apply(snapshot) {
+            healthError = "No profile data came back. If you declined access, allow it under Health → Profile → Apps → HIIT Coach; otherwise add your details to the Health app and try again — or keep entering them manually here."
         }
     }
 
@@ -213,13 +235,16 @@ struct SettingsView: View {
                     get: { settings.value.age ?? 35 },
                     set: { settings.value.age = $0 }))
         case .weight:
+            // Getters clamp into the wheel's range: the kg and lb ranges
+            // don't convert to each other exactly, and an out-of-range value
+            // leaves the Picker with no selected row at all.
             if settings.value.useMetric {
                 NumberPickerSheet(
                     title: "Weight",
                     range: 35...200,
                     suffix: "kg",
                     selection: Binding(
-                        get: { Int((settings.value.weightKg ?? 75).rounded()) },
+                        get: { min(200, max(35, Int((settings.value.weightKg ?? 75).rounded()))) },
                         set: { settings.value.weightKg = Double($0) }))
             } else {
                 NumberPickerSheet(
@@ -227,7 +252,7 @@ struct SettingsView: View {
                     range: 80...440,
                     suffix: "lb",
                     selection: Binding(
-                        get: { Int(((settings.value.weightKg ?? 75) * 2.20462).rounded()) },
+                        get: { min(440, max(80, Int(((settings.value.weightKg ?? 75) * 2.20462).rounded()))) },
                         set: { settings.value.weightKg = Double($0) / 2.20462 }))
             }
         case .restingHR:
@@ -270,6 +295,13 @@ struct NumberPickerSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .onAppear {
+                // A wheel only calls the binding's setter when the selection
+                // *changes* — commit the presented value up front so opening
+                // the sheet and tapping Done actually saves what's shown.
+                let shown = selection
+                selection = shown
             }
         }
     }

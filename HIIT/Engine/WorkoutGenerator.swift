@@ -39,12 +39,12 @@ enum WorkoutGenerator {
             deload = true
         }
 
-        let protocolKind = chooseProtocol(input)
-        let kit = makeKit(input, protocolKind: protocolKind)
+        let requestedProtocol = chooseProtocol(input)
+        let kit = makeKit(input, protocolKind: requestedProtocol)
         let total = Double(max(8, input.minutes) * 60)
 
         let warmupSecs: Double
-        if protocolKind == .norwegian {
+        if requestedProtocol == .norwegian {
             warmupSecs = 300
         } else if input.minutes <= 12 {
             warmupSecs = 120
@@ -60,7 +60,12 @@ enum WorkoutGenerator {
         phases.append(IntervalPhase(kind: .warmup, seconds: (warmupSecs * 0.4).rounded(), label: "Warm up", cue: "Open up a little", target: kit.build))
 
         let core = max(120, total - warmupSecs - cooldownMin)
-        var corePhases = buildCore(protocolKind, core: core, input: input, kit: kit)
+        // A core builder can fall back to classic intervals when its own
+        // protocol doesn't fit the time budget — name the plan after what
+        // was actually built, not what was requested.
+        let coreResult = buildCore(requestedProtocol, core: core, input: input, kit: kit)
+        var corePhases = coreResult.phases
+        let protocolKind = coreResult.kind
 
         // Spend any leftover time as an easy steady block, then cool down —
         // extra Zone-2 minutes are far more useful than a padded cooldown.
@@ -221,13 +226,18 @@ enum WorkoutGenerator {
         if input.equipment == .treadmill && input.machine.hasIncline {
             workIncline = 1 // 1% offsets the missing wind resistance vs outdoors
         }
-        // Low-impact mode swaps running speed for incline walking.
-        if input.preferLowImpact && input.equipment == .treadmill && input.machine.hasIncline {
+        // Low-impact mode swaps running speed for incline walking. The cap
+        // applies to every work-intensity target — sprints included — or the
+        // hardest phases would put a user who opted out of running right
+        // back into a 6 mph sprint at 6% incline.
+        let lowImpact = input.preferLowImpact && input.equipment == .treadmill && input.machine.hasIncline
+        if lowImpact {
             work = min(work, 4.2)
             workIncline = min(max(6, 5 + 0.5 * input.progression), input.machine.maxInclinePercent)
         }
 
-        let sprint = min(work + 1.8, input.machine.maxSpeedMph)
+        var sprint = min(work + 1.8, input.machine.maxSpeedMph)
+        if lowImpact { sprint = min(sprint, 4.2) }
         let warm = max(1.5, easy - 0.4)
         return Speeds(warm: round1(warm), easy: round1(easy), work: round1(work), sprint: round1(sprint), workIncline: workIncline, easyIncline: easyIncline)
     }
@@ -286,6 +296,12 @@ enum WorkoutGenerator {
         case .treadmill, .outdoor:
             let s = treadmillSpeeds(input)
             let workBand = hrBand(for: .work, level: input.level)
+            // Norwegian efforts sit just under the classic work speed; in
+            // low-impact mode they get the same walking cap as every other
+            // work target (the ≥6% incline carries the intensity instead).
+            let lowImpact = input.preferLowImpact && input.equipment == .treadmill && input.machine.hasIncline
+            var norwegianSpeed = round1(max(s.easy + 0.8, s.work - 0.6))
+            if lowImpact { norwegianSpeed = min(norwegianSpeed, 4.2) }
             return TargetKit(
                 warm: treadTarget(speed: s.warm, incline: s.easyIncline, rpe: 2, words: "Very comfortable", hr: hrBand(for: .warmup, level: input.level)),
                 build: treadTarget(speed: round1((s.warm + s.work) / 2), incline: s.easyIncline, rpe: 4, words: "Getting warmer", hr: hrBand(for: .warmup, level: input.level)),
@@ -297,7 +313,7 @@ enum WorkoutGenerator {
                 cool: treadTarget(speed: max(1.5, round1(s.warm - 0.3)), incline: 0, rpe: 2, words: "Wind it down", hr: hrBand(for: .cooldown, level: input.level)),
                 hillWork: treadTarget(speed: round1(min(s.work * 0.72, 4.5)), incline: min(max(6, 5 + 0.5 * input.progression), max(1, input.machine.maxInclinePercent)), rpe: 8, words: "Strong climb", hr: workBand),
                 surgeWork: treadTarget(speed: s.sprint, incline: s.workIncline, rpe: 9, words: "Fast", hr: workBand),
-                norwegianWork: treadTarget(speed: round1(max(s.easy + 0.8, s.work - 0.6)), incline: s.workIncline, rpe: 7, words: "Hard but sustainable", hr: (85, 95)))
+                norwegianWork: treadTarget(speed: norwegianSpeed, incline: s.workIncline, rpe: 7, words: "Hard but sustainable", hr: (85, 95)))
         case .bike:
             let b = bikeEfforts(input)
             let workBand = hrBand(for: .work, level: input.level)
@@ -330,14 +346,16 @@ enum WorkoutGenerator {
 
     // MARK: - Core builders
 
-    private static func buildCore(_ kind: ProtocolKind, core: Double, input: GeneratorInput, kit: TargetKit) -> [IntervalPhase] {
+    /// Returns the phases plus the protocol that was actually built, so the
+    /// plan's name/focus/cue lead can follow a fallback to classic intervals.
+    private static func buildCore(_ kind: ProtocolKind, core: Double, input: GeneratorInput, kit: TargetKit) -> (phases: [IntervalPhase], kind: ProtocolKind) {
         switch kind {
-        case .classic: return classicCore(core: core, input: input, kit: kit)
+        case .classic: return (classicCore(core: core, input: input, kit: kit), .classic)
         case .pyramid: return pyramidCore(core: core, input: input, kit: kit)
         case .norwegian: return norwegianCore(core: core, input: input, kit: kit)
         case .tenTwentyThirty: return tenTwentyThirtyCore(core: core, input: input, kit: kit)
         case .hills: return hillsCore(core: core, input: input, kit: kit)
-        case .surges: return surgesCore(core: core, input: input, kit: kit)
+        case .surges: return (surgesCore(core: core, input: input, kit: kit), .surges)
         }
     }
 
@@ -378,7 +396,7 @@ enum WorkoutGenerator {
         return phases
     }
 
-    private static func pyramidCore(core: Double, input: GeneratorInput, kit: TargetKit) -> [IntervalPhase] {
+    private static func pyramidCore(core: Double, input: GeneratorInput, kit: TargetKit) -> (phases: [IntervalPhase], kind: ProtocolKind) {
         let base: Double
         switch input.level {
         case .beginner: base = 40
@@ -404,12 +422,12 @@ enum WorkoutGenerator {
             }
         }
         if phases.filter({ $0.kind == .work }).count < 3 {
-            return classicCore(core: core, input: input, kit: kit)
+            return (classicCore(core: core, input: input, kit: kit), .classic)
         }
-        return phases
+        return (phases, .pyramid)
     }
 
-    private static func norwegianCore(core: Double, input: GeneratorInput, kit: TargetKit) -> [IntervalPhase] {
+    private static func norwegianCore(core: Double, input: GeneratorInput, kit: TargetKit) -> (phases: [IntervalPhase], kind: ProtocolKind) {
         let workSecs = 240.0
         let recSecs = 180.0
         var reps = 4
@@ -417,7 +435,7 @@ enum WorkoutGenerator {
             reps -= 1
         }
         if reps < 3 {
-            return classicCore(core: core, input: input, kit: kit)
+            return (classicCore(core: core, input: input, kit: kit), .classic)
         }
         var phases: [IntervalPhase] = []
         for i in 1...reps {
@@ -426,16 +444,16 @@ enum WorkoutGenerator {
                 phases.append(IntervalPhase(kind: .recover, seconds: recSecs, label: "Recover", cue: "Active recovery — keep moving", target: kit.easy))
             }
         }
-        return phases
+        return (phases, .norwegian)
     }
 
-    private static func tenTwentyThirtyCore(core: Double, input: GeneratorInput, kit: TargetKit) -> [IntervalPhase] {
+    private static func tenTwentyThirtyCore(core: Double, input: GeneratorInput, kit: TargetKit) -> (phases: [IntervalPhase], kind: ProtocolKind) {
         let blockSecs = 300.0 // 5 × (30 easy + 20 moderate + 10 sprint)
         let restSecs = 120.0
         var blocks = Int(((core + restSecs) / (blockSecs + restSecs)).rounded(.down))
         blocks = max(2, min(4, blocks))
         if Double(blocks) * blockSecs + Double(blocks - 1) * restSecs > core {
-            return classicCore(core: core, input: input, kit: kit)
+            return (classicCore(core: core, input: input, kit: kit), .classic)
         }
         var phases: [IntervalPhase] = []
         for b in 1...blocks {
@@ -448,15 +466,20 @@ enum WorkoutGenerator {
                 phases.append(IntervalPhase(kind: .recover, seconds: restSecs, label: "Between blocks", cue: "Full recovery", target: kit.easy))
             }
         }
-        return phases
+        return (phases, .tenTwentyThirty)
     }
 
-    private static func hillsCore(core: Double, input: GeneratorInput, kit: TargetKit) -> [IntervalPhase] {
+    private static func hillsCore(core: Double, input: GeneratorInput, kit: TargetKit) -> (phases: [IntervalPhase], kind: ProtocolKind) {
         let work: Double = input.level == .beginner ? 45 : 60
         let rec: Double = input.level == .beginner ? 90 : 75
         let cycle = work + rec
         var n = Int(((core + rec) / cycle).rounded(.down))
         n = max(3, min(n, 12))
+        // Very short sessions can't fit even the 3-climb minimum — fall back
+        // to classic intervals instead of overrunning the time budget.
+        if Double(n) * work + Double(n - 1) * rec > core {
+            return (classicCore(core: core, input: input, kit: kit), .classic)
+        }
         var phases: [IntervalPhase] = []
         for i in 1...n {
             phases.append(IntervalPhase(kind: .work, seconds: work, label: "Climb", cue: "Drive with your legs", target: kit.hillWork))
@@ -464,7 +487,7 @@ enum WorkoutGenerator {
                 phases.append(IntervalPhase(kind: .recover, seconds: rec, label: "Recover", cue: "Flat and easy", target: kit.easy))
             }
         }
-        return phases
+        return (phases, .hills)
     }
 
     private static func surgesCore(core: Double, input: GeneratorInput, kit: TargetKit) -> [IntervalPhase] {
