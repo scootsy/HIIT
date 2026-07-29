@@ -71,14 +71,14 @@ struct HRMonitorSheet: View {
         } header: {
             Text("Your monitor")
         } footer: {
-            Text("Every workout connects to it automatically — nothing else to do. If the number stops updating, check the strap is on and broadcasting.")
+            Text("Connects automatically every workout.")
         }
     }
 
     private var statusLine: String {
         switch ble.status {
-        case .connected: return "Connected — receiving your heart rate"
-        case .connecting: return "Connecting… make sure the strap is on and broadcasting"
+        case .connected: return "Connected"
+        case .connecting: return "Connecting…"
         case .bluetoothOff: return "Bluetooth is off — turn it on in Control Center"
         case .unauthorized: return "Bluetooth access is off — allow it in Settings → HIIT Coach"
         default: return "Not connected"
@@ -87,17 +87,9 @@ struct HRMonitorSheet: View {
 
     private var explainerSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("No Apple Watch needed", systemImage: "heart.text.square.fill")
-                    .font(.subheadline.weight(.semibold))
-                Text("Many fitness watches and chest straps can broadcast your heart rate over Bluetooth. Pair one once and every workout shows your pulse live, second by second.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text("First, turn on heart-rate broadcast on your device — for Amazfit it's in the Zepp app under your device's settings; Polar, Garmin, and Coospo straps broadcast automatically when worn.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 4)
+            Text("Turn on heart-rate broadcast on your device (Amazfit: in the Zepp app), then pick it below.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -145,7 +137,7 @@ struct HRMonitorSheet: View {
         } header: {
             Text("Nearby monitors")
         } footer: {
-            Text("A gym can have several monitors broadcasting — pick the one with the strongest signal (that's yours, on your body).")
+            Text("Strongest signal = the one you're wearing.")
         }
     }
 

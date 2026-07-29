@@ -87,7 +87,7 @@ struct RPEPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("How hard was that? (1 = easy, 10 = max)")
+            Text("How hard was that?")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {

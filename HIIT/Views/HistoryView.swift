@@ -31,7 +31,7 @@ struct HistoryView: View {
                                         unit: "mL/kg·min",
                                         series: vo2Series,
                                         higherIsBetter: true,
-                                        explainer: "The single best-evidenced fitness number — and the one HIIT improves most directly.")
+                                        explainer: "The headline fitness number — HIIT's main target.")
                                 }
                                 if !restingSeries.isEmpty {
                                     FitnessSignalRow(
@@ -39,12 +39,12 @@ struct HistoryView: View {
                                         unit: "bpm",
                                         series: restingSeries,
                                         higherIsBetter: false,
-                                        explainer: "Tends to drift down as your aerobic engine gets stronger.")
+                                        explainer: "Falls as fitness improves.")
                                 }
                             } header: {
                                 Text("Fitness signals")
                             } footer: {
-                                Text("From Apple Health, last 6 months. Apple estimates VO₂max from outdoor Watch walks and runs.")
+                                Text("Apple Health · last 6 months")
                             }
                         }
                         Section("Weekly minutes") {
@@ -225,9 +225,9 @@ struct SessionDetailView: View {
                         StatTile(title: "Effort", value: session.rpe.map { "\($0)/10" } ?? "—", subtitle: "your rating")
                     }
                     if let recovery = session.hrRecovery {
-                        StatTile(title: "Heart-rate recovery (1 min)",
+                        StatTile(title: "HR recovery",
                                  value: "−\(Int(recovery)) bpm",
-                                 subtitle: "drop after the last hard effort — bigger is better")
+                                 subtitle: "1-min drop after last effort")
                     }
                 }
 

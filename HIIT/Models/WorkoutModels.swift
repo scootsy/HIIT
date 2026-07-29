@@ -8,9 +8,9 @@ enum ExperienceLevel: String, Codable, CaseIterable, Identifiable {
 
     var blurb: String {
         switch self {
-        case .beginner: return "New to intervals, or returning after a break"
-        case .intermediate: return "Exercise regularly, comfortable pushing hard"
-        case .advanced: return "Train often and want maximal sessions"
+        case .beginner: return "New to intervals, or coming back"
+        case .intermediate: return "Train regularly"
+        case .advanced: return "Want maximal sessions"
         }
     }
 }

@@ -83,9 +83,9 @@ struct SummaryView: View {
                 StatTile(title: "Max HR", value: r.maxHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
             }
             if let recovery = r.hrRecovery {
-                StatTile(title: "Heart-rate recovery (1 min)",
+                StatTile(title: "HR recovery",
                          value: "−\(Int(recovery)) bpm",
-                         subtitle: "how fast your HR fell after the last hard effort — bigger drops track with a fitter heart")
+                         subtitle: "1-min drop after last effort")
             }
         }
     }
@@ -127,7 +127,7 @@ struct SummaryView: View {
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
 
             if let healthSaved {
-                Label(healthSaved ? "Saved to Apple Health" : "Couldn't save to Apple Health (check permissions in the Health app)",
+                Label(healthSaved ? "Saved to Apple Health" : "Couldn't save to Apple Health",
                       systemImage: healthSaved ? "heart.circle.fill" : "exclamationmark.circle")
                     .font(.footnote)
                     .foregroundStyle(healthSaved ? Theme.recover : .secondary)

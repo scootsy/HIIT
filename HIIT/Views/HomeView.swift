@@ -79,16 +79,16 @@ struct HomeView: View {
 
     private var suggestionText: String {
         guard let last = sessions.first else {
-            return "First session? Pick your machine and 15 minutes — the plan starts friendly and builds from what you actually complete."
+            return "Pick a machine and 15 minutes — it builds from there."
         }
         let days = Calendar.current.dateComponents([.day], from: last.date, to: Date()).day ?? 0
         if days == 0 {
-            return "Already trained today — nice. If you go again, choose 'Easier today' and keep it short."
+            return "Trained today. Going again? Keep it short and easy."
         }
         if days >= 4 {
-            return "It's been \(days) days since your last session — ease back in with 15–20 minutes on 'Coach's pick'."
+            return "\(days) days off — ease back in."
         }
-        return "You're \(days == 1 ? "a day" : "\(days) days") out from your last \(last.equipment.label.lowercased()) session — the sweet spot for the next one. Targets will step up if last time felt good."
+        return "\(days == 1 ? "1 day" : "\(days) days") since your last \(last.equipment.label.lowercased()) session — prime time for the next one."
     }
 
     private var weekStats: some View {

@@ -25,9 +25,9 @@ enum Equipment: String, Codable, CaseIterable, Identifiable {
 
     var blurb: String {
         switch self {
-        case .treadmill: return "Speed & incline targets, with early warnings before every change"
+        case .treadmill: return "Speed & incline targets"
         case .bike: return "Resistance & cadence targets"
-        case .outdoor: return "Effort-based surges — no machine needed"
+        case .outdoor: return "Effort-based surges"
         }
     }
 }

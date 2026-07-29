@@ -107,11 +107,6 @@ struct SetupView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                if settings.hasConfiguredMachine(for: .treadmill) || settings.hasConfiguredMachine(for: .bike) {
-                    Text("Machine details are remembered — edit them any time in Settings.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
             }
             .padding()
         }
@@ -145,11 +140,6 @@ struct SetupView: View {
                         }
                     }
                 }
-                Section {
-                    Text("Targets are always kept inside these limits, and you'll get a warning before every change so the belt has time to catch up.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
             } else {
                 Section("Resistance") {
                     Picker("Resistance levels on your bike", selection: $machine.maxResistance) {
@@ -161,11 +151,6 @@ struct SetupView: View {
                         Text("32").tag(32)
                         Text("100 (Peloton-style)").tag(100)
                     }
-                }
-                Section {
-                    Text("Workouts give you a resistance level and a cadence (pedal rpm) for every phase.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
             Section {
@@ -223,9 +208,6 @@ struct SetupView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                Text(vibeBlurb)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             Section {
                 Button {
@@ -237,14 +219,6 @@ struct SetupView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-        }
-    }
-
-    private var vibeBlurb: String {
-        switch vibe {
-        case .auto: return "The app decides based on your history — including the occasional deliberately lighter session."
-        case .push: return "Slightly hotter targets. Use sparingly."
-        case .easy: return "Lower intensity, longer recoveries. Great for off days or a post-lift finisher."
         }
     }
 

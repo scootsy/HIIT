@@ -43,7 +43,8 @@ final class WorkoutEngine {
     private var timer: Timer? = nil
     private var phaseStart = Date()
     private var pauseBegan: Date? = nil
-    private var actualSeconds: [Double]
+    /// Read by the live kcal/distance estimate so skipped phases count correctly.
+    private(set) var actualSeconds: [Double]
     private var lastBeepSecond = -1
     private var hrSum = 0.0
     private var hrCount = 0.0
