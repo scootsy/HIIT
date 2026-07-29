@@ -32,7 +32,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Any strap or watch that broadcasts Bluetooth heart rate. Apple Watch: just start a workout on the Watch instead.")
                 }
-                Section("Training") {
+                Section {
                     Picker("Experience", selection: experienceBinding) {
                         ForEach(ExperienceLevel.allCases) { level in
                             Text(level.label).tag(level)
@@ -45,6 +45,10 @@ struct SettingsView: View {
                     }
                     Toggle("Sound cues", isOn: $store.value.soundOn)
                     Toggle("Haptic cues", isOn: $store.value.hapticsOn)
+                } header: {
+                    Text("Training")
+                } footer: {
+                    Text("Experience adjusts automatically from your results.")
                 }
 
                 Section("Equipment") {

@@ -18,6 +18,7 @@ struct AppSettings: Codable {
     var lastHealthSync: Date? = nil
     var hrMonitorID: String? = nil
     var hrMonitorName: String? = nil
+    var experienceSetOnce: Bool? = nil
 }
 
 @Observable

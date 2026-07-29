@@ -193,8 +193,23 @@ struct SummaryView: View {
         } else {
             progress.hardSessionsSinceEasy += 1
         }
-        session.nextTimeNote = update.note
-        nextNote = update.note
+
+        // Sustained performance moves the experience tier itself; rebasing
+        // every equipment's level keeps targets continuous across the change.
+        var note = update.note
+        if let change = ProgressionEngine.tierChange(experience: settings.experience, progressLevel: progress.level) {
+            settings.experience = change.newExperience
+            let delta = progress.level >= ProgressionEngine.tierLevelSpan
+                ? -ProgressionEngine.tierLevelSpan
+                : ProgressionEngine.tierLevelSpan
+            let allProgress = (try? context.fetch(FetchDescriptor<EquipmentProgress>())) ?? []
+            for entry in allProgress {
+                entry.level += delta
+            }
+            note = change.note
+        }
+        session.nextTimeNote = note
+        nextNote = note
 
         context.insert(session)
         try? context.save()

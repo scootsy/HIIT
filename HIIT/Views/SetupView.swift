@@ -170,16 +170,20 @@ struct SetupView: View {
 
     private var sessionStep: some View {
         Form {
-            Section("Experience") {
-                Picker("Experience", selection: $level) {
-                    ForEach(ExperienceLevel.allCases) { option in
-                        Text(option.label).tag(option)
+            // Asked once; after that it lives in Settings and adjusts itself
+            // from results.
+            if settings.value.experienceSetOnce != true {
+                Section("Experience") {
+                    Picker("Experience", selection: $level) {
+                        ForEach(ExperienceLevel.allCases) { option in
+                            Text(option.label).tag(option)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    Text(level.blurb)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
-                Text(level.blurb)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             Section("How long have you got?") {
                 HStack(spacing: 8) {
@@ -300,7 +304,12 @@ struct SetupView: View {
     // MARK: - Plan generation
 
     private func buildPlan() {
-        settings.experience = level
+        if settings.value.experienceSetOnce != true {
+            settings.experience = level
+            settings.value.experienceSetOnce = true
+        } else {
+            level = settings.experience
+        }
         settings.value.lastEquipmentRaw = equipment.rawValue
         let progress = fetchProgress()
         let input = GeneratorInput(

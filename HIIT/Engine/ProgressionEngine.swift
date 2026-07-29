@@ -17,7 +17,7 @@ enum ProgressionEngine {
         var note: String
 
         if completionRatio < 0.8 {
-            level = max(0, level - 0.5)
+            level = max(-3, level - 0.5)
             note = "We'll ease the targets a touch next time so you can finish strong."
         } else if let rpe {
             switch rpe {
@@ -45,7 +45,7 @@ enum ProgressionEngine {
             level += override
             note = "You ran ahead of the targets today — next session starts where you actually trained."
         } else if override < -0.2 {
-            level = max(0, level + override)
+            level = max(-3, level + override)
             note = "You dialed it back mid-session, so next time starts at the pace you actually held."
         }
 
@@ -55,5 +55,36 @@ enum ProgressionEngine {
         }
 
         return Update(newLevel: level, note: note)
+    }
+
+    /// Experience promotes/demotes itself from sustained performance.
+    /// ~7 progression levels ≈ the target gap between tiers, so rebasing by
+    /// `tierLevelSpan` on a change keeps the actual targets continuous —
+    /// what changes is the session structure (effort lengths, recoveries,
+    /// protocols, HR bands).
+    static let tierLevelSpan = 7.0
+
+    static func tierChange(experience: ExperienceLevel, progressLevel: Double) -> (newExperience: ExperienceLevel, note: String)? {
+        if progressLevel >= tierLevelSpan {
+            switch experience {
+            case .beginner:
+                return (.intermediate, "Leveled up — intermediate sessions from now on.")
+            case .intermediate:
+                return (.advanced, "Leveled up — advanced sessions from now on.")
+            case .advanced:
+                return nil
+            }
+        }
+        if progressLevel <= -3 {
+            switch experience {
+            case .beginner:
+                return nil
+            case .intermediate:
+                return (.beginner, "Scaled the structure back to beginner for now.")
+            case .advanced:
+                return (.intermediate, "Scaled the structure back to intermediate for now.")
+            }
+        }
+        return nil
     }
 }
