@@ -10,18 +10,23 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    startCard
-                    suggestionCard
-                    weekStats
-                    if !sessions.isEmpty {
+                VStack(alignment: .leading, spacing: 20) {
+                    hero
+                    if sessions.isEmpty {
+                        emptyState
+                    } else {
+                        weekStats
                         recentSection
                     }
                 }
-                .padding()
+                .padding(.horizontal)
+                .padding(.top, 16)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Train")
+            .safeAreaInset(edge: .bottom) { startBar }
+            .navigationDestination(for: WorkoutSession.self) { session in
+                SessionDetailView(session: session)
+            }
         }
         .sheet(isPresented: $showSetup) {
             SetupView { plan in
@@ -36,48 +41,32 @@ struct HomeView: View {
         }
     }
 
-    private var startCard: some View {
-        Button {
-            showSetup = true
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Start a workout")
-                        .font(.title2.weight(.bold))
-                    Text("Equipment · time · go")
-                        .font(.subheadline)
-                        .opacity(0.85)
-                }
-                Spacer()
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 40))
-                    .opacity(0.9)
-            }
-            .foregroundStyle(.white)
-            .padding(22)
-            .frame(maxWidth: .infinity)
-            .background(
-                LinearGradient(colors: [Theme.accent, Color(hex: 0xC2354F)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing),
-                in: RoundedRectangle(cornerRadius: 20))
-        }
-        .buttonStyle(.plain)
-    }
+    // MARK: - Hero
 
-    private var suggestionCard: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "lightbulb.fill")
-                .foregroundStyle(Theme.steady)
-            Text(suggestionText)
-                .font(.footnote)
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(Date.now, format: .dateTime.weekday(.wide).month().day())
+                .font(.caption.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+            Text(greeting)
+                .font(.system(.largeTitle, design: .rounded).weight(.heavy))
+            Text(statusLine)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .padding(.top, 8)
     }
 
-    private var suggestionText: String {
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<12: return "Good morning"
+        case 12..<17: return "Good afternoon"
+        default: return "Good evening"
+        }
+    }
+
+    private var statusLine: String {
         guard let last = sessions.first else {
             return "Pick a machine and 15 minutes — it builds from there."
         }
@@ -88,7 +77,22 @@ struct HomeView: View {
         if days >= 4 {
             return "\(days) days off — ease back in."
         }
-        return "\(days == 1 ? "1 day" : "\(days) days") since your last \(last.equipment.label.lowercased()) session — prime time for the next one."
+        return "\(days == 1 ? "1 day" : "\(days) days") since your last \(last.equipment.label.lowercased()) session."
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(Theme.accent.opacity(0.12))
+                    .frame(width: 132, height: 132)
+                Image(systemName: "flame.fill")
+                    .font(.system(size: 52))
+                    .foregroundStyle(Theme.accent)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 56)
     }
 
     private var weekStats: some View {
@@ -117,8 +121,39 @@ struct HomeView: View {
                 .buttonStyle(.plain)
             }
         }
-        .navigationDestination(for: WorkoutSession.self) { session in
-            SessionDetailView(session: session)
+    }
+
+    // MARK: - Start bar
+
+    /// Pinned above the tab bar so the primary action sits under the thumb;
+    /// content scrolls beneath and fades out behind it.
+    private var startBar: some View {
+        Button {
+            showSetup = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "bolt.fill")
+                Text("Start a workout")
+            }
+            .font(.headline)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(
+                LinearGradient(colors: [Theme.accent, Color(hex: 0xC2354F)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing),
+                in: RoundedRectangle(cornerRadius: 18))
+            .shadow(color: Theme.accent.opacity(0.35), radius: 14, y: 6)
         }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
+        .background(
+            LinearGradient(colors: [Color(.systemGroupedBackground).opacity(0),
+                                    Color(.systemGroupedBackground)],
+                           startPoint: .top, endPoint: .bottom)
+                .allowsHitTesting(false)
+        )
     }
 }

@@ -20,7 +20,7 @@ struct HistoryView: View {
                     ContentUnavailableView(
                         "No workouts yet",
                         systemImage: "flame",
-                        description: Text("Finished sessions land here, along with your weekly trend."))
+                        description: Text("Finished sessions land here, along with your trends."))
                 } else {
                     List {
                         if !vo2Series.isEmpty || !restingSeries.isEmpty {
@@ -47,8 +47,8 @@ struct HistoryView: View {
                                 Text("Apple Health · last 6 months")
                             }
                         }
-                        Section("Weekly minutes") {
-                            WeeklyMinutesChart(sessions: sessions)
+                        Section("Minutes") {
+                            MinutesTrendChart(sessions: sessions)
                                 .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
                         }
                         Section("Sessions") {
@@ -152,38 +152,73 @@ struct FitnessSignalRow: View {
     }
 }
 
-struct WeeklyMinutesChart: View {
-    let sessions: [WorkoutSession]
+struct MinutesTrendChart: View {
+    enum Scale: String, CaseIterable, Identifiable {
+        case daily = "Daily"
+        case weekly = "Weekly"
+        case monthly = "Monthly"
 
-    private struct Week: Identifiable {
+        var id: String { rawValue }
+
+        var component: Calendar.Component {
+            switch self {
+            case .daily: return .day
+            case .weekly: return .weekOfYear
+            case .monthly: return .month
+            }
+        }
+
+        /// How many buckets to show, including the current one.
+        var count: Int {
+            switch self {
+            case .daily: return 14
+            case .weekly: return 8
+            case .monthly: return 6
+            }
+        }
+    }
+
+    let sessions: [WorkoutSession]
+    @State private var scale: Scale = .weekly
+
+    private struct Bucket: Identifiable {
         let id: Date
         let minutes: Double
     }
 
-    private var weeks: [Week] {
+    private var buckets: [Bucket] {
         let calendar = Calendar.current
-        let thisWeekStart = calendar.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
-        var buckets: [Week] = []
-        for offset in stride(from: -7, through: 0, by: 1) {
-            guard let start = calendar.date(byAdding: .weekOfYear, value: offset, to: thisWeekStart),
-                  let end = calendar.date(byAdding: .weekOfYear, value: 1, to: start) else { continue }
+        guard let currentStart = calendar.dateInterval(of: scale.component, for: Date())?.start else { return [] }
+        var result: [Bucket] = []
+        for offset in stride(from: -(scale.count - 1), through: 0, by: 1) {
+            guard let start = calendar.date(byAdding: scale.component, value: offset, to: currentStart),
+                  let end = calendar.date(byAdding: scale.component, value: 1, to: start) else { continue }
             let minutes = sessions
                 .filter { $0.date >= start && $0.date < end }
                 .reduce(0.0) { $0 + $1.totalSeconds / 60 }
-            buckets.append(Week(id: start, minutes: minutes))
+            result.append(Bucket(id: start, minutes: minutes))
         }
-        return buckets
+        return result
     }
 
     var body: some View {
-        Chart(weeks) { week in
-            BarMark(
-                x: .value("Week", week.id, unit: .weekOfYear),
-                y: .value("Minutes", week.minutes))
-                .foregroundStyle(Theme.accent.gradient)
-                .cornerRadius(4)
+        VStack(spacing: 14) {
+            Picker("Range", selection: $scale) {
+                ForEach(Scale.allCases) { option in
+                    Text(option.rawValue).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Chart(buckets) { bucket in
+                BarMark(
+                    x: .value("Date", bucket.id, unit: scale.component),
+                    y: .value("Minutes", bucket.minutes))
+                    .foregroundStyle(Theme.accent.gradient)
+                    .cornerRadius(4)
+            }
+            .frame(height: 150)
         }
-        .frame(height: 150)
     }
 }
 
