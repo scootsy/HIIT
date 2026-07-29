@@ -38,16 +38,16 @@ struct WelcomeView: View {
             Text("HIIT Coach")
                 .font(.system(.largeTitle, design: .rounded).weight(.heavy))
             VStack(alignment: .leading, spacing: 18) {
-                featureRow(icon: "wand.and.stars", title: "Workouts built for you",
-                           text: "Pick your machine and how long you've got — a research-based interval session is built around your level.")
-                featureRow(icon: "timer", title: "Guided in real time",
-                           text: "Big timers, clear targets, and early warnings before every speed or resistance change.")
-                featureRow(icon: "chart.line.uptrend.xyaxis", title: "Progress that compounds",
-                           text: "Each session feeds the next: finish strong and the targets step up, struggle and they ease off.")
+                featureRow(icon: "wand.and.stars", title: "Built around you",
+                           text: "Your machine, your time, your level.")
+                featureRow(icon: "timer", title: "Guided live",
+                           text: "Clear targets, early warnings before changes.")
+                featureRow(icon: "chart.line.uptrend.xyaxis", title: "Progressive",
+                           text: "Finish strong and the next session steps up.")
             }
             .padding(.horizontal, 8)
             Spacer()
-            Text("General fitness guidance, not medical advice. Check with a doctor before starting a new exercise program.")
+            Text("Not medical advice — check with a doctor before starting a new exercise program.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -78,7 +78,7 @@ struct WelcomeView: View {
                 .foregroundStyle(.white)
                 .disabled(connecting)
 
-                Button("Set up manually later") { dismiss() }
+                Button("Skip") { dismiss() }
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

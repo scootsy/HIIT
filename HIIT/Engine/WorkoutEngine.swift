@@ -3,10 +3,15 @@ import Observation
 import UIKit
 import AudioToolbox
 
-/// Live-session state machine: drives the phase timer, fires haptic/sound cues
-/// (including the early "change coming" warning sized to the machine's lag),
+/// Live-session state machine: drives the phase timer, fires haptic/sound cues,
 /// aggregates heart-rate samples, supports mid-workout target overrides, and
 /// produces the final SessionResult.
+///
+/// Cue design: only *harder* upcoming targets get the amber warning and its
+/// countdown (low beeps at the lead mark, 10, 6, 3, 2, 1 — then a high GO),
+/// because that's when the machine needs ramp time. Slow-downs get no warning
+/// at all — braking early just cuts the effort short — but a finishing work
+/// phase counts itself out with the same beeps and a distinct "done" tone.
 @Observable
 final class WorkoutEngine {
 
@@ -43,7 +48,8 @@ final class WorkoutEngine {
     private var timer: Timer? = nil
     private var phaseStart = Date()
     private var pauseBegan: Date? = nil
-    private var actualSeconds: [Double]
+    /// Read by the live kcal/distance estimate so skipped phases count correctly.
+    private(set) var actualSeconds: [Double]
     private var lastBeepSecond = -1
     private var hrSum = 0.0
     private var hrCount = 0.0
@@ -124,11 +130,52 @@ final class WorkoutEngine {
         min(Double(plan.cueLeadSeconds), currentPhase.seconds / 2)
     }
 
-    /// True when a target change is imminent — the UI turns amber so the user
-    /// can start adjusting the machine before the phase actually flips.
+    /// A change is "harder" when any axis steps up. Only those need machine
+    /// lead time — easing off can happen after the effort ends, so warning
+    /// about a slow-down would just invite cutting the effort short.
+    private func isHarder(_ next: PhaseTarget, than current: PhaseTarget) -> Bool {
+        if let a = next.speedMph, let b = current.speedMph, a > b + 0.01 { return true }
+        if let a = next.inclinePercent, let b = current.inclinePercent, a > b + 0.01 { return true }
+        if let a = next.resistance, let b = current.resistance, a > b { return true }
+        return false
+    }
+
+    /// True when a *harder* target is imminent — the UI turns amber so the
+    /// user can start ramping the machine before the phase actually flips.
     var isWarning: Bool {
         guard state == .running, !inOvertime, let next = nextTarget else { return false }
-        return phaseRemaining <= effectiveCueLead && next != currentTarget
+        return phaseRemaining <= effectiveCueLead && isHarder(next, than: currentTarget)
+    }
+
+    // MARK: - Countdown cues
+
+    /// How the current phase should end: counting down into a harder target
+    /// (ramp the machine, then GO), counting an effort out (push to the line,
+    /// then ease off — no early warning, no amber), or quietly.
+    private enum PhaseEndCue { case rampUp, effortDone, none }
+
+    private var phaseEndCue: PhaseEndCue {
+        guard !inOvertime else { return .none }
+        if let next = nextTarget, isHarder(next, than: currentTarget) { return .rampUp }
+        if currentPhase.kind == .work { return .effortDone }
+        return .none
+    }
+
+    /// Seconds-remaining marks that get a low beep: lead, 10, 6, 3, 2, 1 —
+    /// low-low-low, then the phase change lands the high GO (or done) tone.
+    private var beepSchedule: [Int] {
+        let lead: Double
+        switch phaseEndCue {
+        case .rampUp: lead = effectiveCueLead
+        case .effortDone: lead = min(10, currentPhase.seconds / 2)
+        case .none: return []
+        }
+        var marks = [10, 6, 3, 2, 1].filter { Double($0) <= lead }
+        let leadMark = Int(lead.rounded())
+        if leadMark > 3 && !marks.contains(leadMark) {
+            marks.insert(leadMark, at: 0)
+        }
+        return marks
     }
 
     // MARK: - Mid-workout overrides
@@ -173,6 +220,7 @@ final class WorkoutEngine {
         startDate = Date()
         phaseStart = Date()
         UIApplication.shared.isIdleTimerDisabled = true
+        if soundOn { TonePlayer.shared.prepare() }
         cue(.phaseChange)
         let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.tick()
@@ -213,9 +261,10 @@ final class WorkoutEngine {
         phaseElapsed = Date().timeIntervalSince(phaseStart)
         let remaining = currentPhase.seconds - phaseElapsed
 
-        if remaining <= 3.2 && nextPhase != nil {
+        if remaining > 0 {
+            let schedule = beepSchedule
             let s = Int(remaining.rounded(.up))
-            if s != lastBeepSecond && s >= 1 && s <= 3 {
+            if s != lastBeepSecond && schedule.contains(s) {
                 lastBeepSecond = s
                 cue(.tick)
             }
@@ -236,6 +285,7 @@ final class WorkoutEngine {
         actualSeconds[phaseIndex] = auto ? currentPhase.seconds : min(phaseElapsed, currentPhase.seconds)
         lastBeepSecond = -1
         let leavingKind = currentPhase.kind
+        let endCue = phaseEndCue
         if phaseIndex + 1 >= plan.phases.count {
             // Manual skip on the final phase: straight to overtime, not out.
             inOvertime = true
@@ -253,7 +303,11 @@ final class WorkoutEngine {
         let carry = max(0, min(overshoot, 1))
         phaseStart = Date().addingTimeInterval(-carry)
         phaseElapsed = carry
-        cue(currentPhase.kind == .work ? .workStart : .phaseChange)
+        switch endCue {
+        case .rampUp: cue(.go)
+        case .effortDone: cue(.done)
+        case .none: cue(.phaseChange)
+        }
     }
 
     private func finish(early: Bool) {
@@ -264,6 +318,10 @@ final class WorkoutEngine {
         timer = nil
         UIApplication.shared.isIdleTimerDisabled = false
         cue(.finish)
+        // Give the fanfare a moment to sound before releasing the session.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            TonePlayer.shared.deactivate()
+        }
     }
 
     // MARK: - Heart rate
@@ -341,29 +399,32 @@ final class WorkoutEngine {
 
     // MARK: - Cues
 
-    private enum Cue { case tick, workStart, phaseChange, finish }
+    private enum Cue { case tick, go, done, phaseChange, finish }
 
     private func cue(_ kind: Cue) {
         if hapticsOn {
             switch kind {
             case .tick:
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            case .workStart:
+            case .go:
                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
             case .phaseChange:
                 UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-            case .finish:
+            case .done, .finish:
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             }
         }
         if soundOn {
+            let tone: TonePlayer.Tone
             switch kind {
-            case .tick:
-                AudioServicesPlaySystemSound(1103)
-            case .workStart, .phaseChange:
-                AudioServicesPlaySystemSound(1104)
-            case .finish:
-                AudioServicesPlaySystemSound(1025)
+            case .tick, .phaseChange: tone = .low
+            case .go: tone = .high
+            case .done: tone = .done
+            case .finish: tone = .fanfare
+            }
+            if !TonePlayer.shared.play(tone) {
+                // Engine unavailable — at least try the old system sounds.
+                AudioServicesPlaySystemSound(kind == .tick ? 1103 : 1104)
             }
         }
     }

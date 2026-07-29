@@ -14,11 +14,12 @@ extension Color {
 
 enum Theme {
     static let accent = Color(hex: 0xFF5F44)
-    static let warmup = Color(hex: 0x46A6FF)
+    static let warmup = Color(hex: 0x3E7BD6)     // was 0x46A6FF — less pull on black
     static let work = Color(hex: 0xFF5F44)
-    static let recover = Color(hex: 0x3DDC84)
-    static let steady = Color(hex: 0xFFB340)
-    static let cooldown = Color(hex: 0x7A6FF0)
+    static let recover = Color(hex: 0x29C97A)    // was 0x3DDC84 — reads as "down"
+    static let steady = Color(hex: 0xD9922B)     // was 0xFFB340 — amber now belongs to the warning
+    static let cooldown = Color(hex: 0x8E86F5)   // was 0x7A6FF0 — survives low opacity
+    static let warning = Color(hex: 0xFFB340)    // NEW: the early-change amber, used nowhere else
     static let night = Color(hex: 0x0B1020)
 
     static func color(for kind: PhaseKind) -> Color {

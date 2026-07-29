@@ -83,9 +83,9 @@ struct SummaryView: View {
                 StatTile(title: "Max HR", value: r.maxHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
             }
             if let recovery = r.hrRecovery {
-                StatTile(title: "Heart-rate recovery (1 min)",
+                StatTile(title: "HR recovery",
                          value: "−\(Int(recovery)) bpm",
-                         subtitle: "how fast your HR fell after the last hard effort — bigger drops track with a fitter heart")
+                         subtitle: "1-min drop after last effort")
             }
         }
     }
@@ -127,7 +127,7 @@ struct SummaryView: View {
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
 
             if let healthSaved {
-                Label(healthSaved ? "Saved to Apple Health" : "Couldn't save to Apple Health (check permissions in the Health app)",
+                Label(healthSaved ? "Saved to Apple Health" : "Couldn't save to Apple Health",
                       systemImage: healthSaved ? "heart.circle.fill" : "exclamationmark.circle")
                     .font(.footnote)
                     .foregroundStyle(healthSaved ? Theme.recover : .secondary)
@@ -193,8 +193,23 @@ struct SummaryView: View {
         } else {
             progress.hardSessionsSinceEasy += 1
         }
-        session.nextTimeNote = update.note
-        nextNote = update.note
+
+        // Sustained performance moves the experience tier itself; rebasing
+        // every equipment's level keeps targets continuous across the change.
+        var note = update.note
+        if let change = ProgressionEngine.tierChange(experience: settings.experience, progressLevel: progress.level) {
+            settings.experience = change.newExperience
+            let delta = progress.level >= ProgressionEngine.tierLevelSpan
+                ? -ProgressionEngine.tierLevelSpan
+                : ProgressionEngine.tierLevelSpan
+            let allProgress = (try? context.fetch(FetchDescriptor<EquipmentProgress>())) ?? []
+            for entry in allProgress {
+                entry.level += delta
+            }
+            note = change.note
+        }
+        session.nextTimeNote = note
+        nextNote = note
 
         context.insert(session)
         try? context.save()

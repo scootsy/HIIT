@@ -28,8 +28,6 @@ struct ActiveWorkoutContainerView: View {
             engine.maxHR = settings.maxHR
             engine.machine = settings.machine(for: engine.plan.equipment)
             engine.start()
-            // Live HR priority: a paired BLE monitor streams every second;
-            // Health-sourced samples (Watch workouts) back-fill when no strap.
             ble.workoutActive = true
             if let idString = settings.value.hrMonitorID, let uuid = UUID(uuidString: idString) {
                 ble.connectToSaved(id: uuid, name: settings.value.hrMonitorName ?? "your monitor")
@@ -54,42 +52,79 @@ struct ActiveWorkoutContainerView: View {
     }
 }
 
+// MARK: - Live workout
+
+/// Layout: stats card → plan spine (expands into the effort editor during
+/// recoveries) → dual-arc ring → target card → heart-rate panel → controls.
+/// The amber early warning tints only the ring, the spine's current segment
+/// and the target card — never the background.
 struct ActiveWorkoutView: View {
     let engine: WorkoutEngine
     @Environment(SettingsStore.self) private var settings
     @Environment(BluetoothHeartRateManager.self) private var ble
     @State private var showEndConfirm = false
     @State private var adjustingPhase: AdjustTargetRequest? = nil
+    /// nil = follow the phase (open during recoveries); true/false = user override.
+    @State private var editorOverride: Bool? = nil
 
     struct AdjustTargetRequest: Identifiable {
         let index: Int
         var id: Int { index }
     }
 
+    // Label + numeral styles used throughout: one numeral family, one label style.
+    private static let labelFont = Font.system(size: 9.5, weight: .semibold)
+    private func numerals(_ size: CGFloat, _ weight: Font.Weight = .bold) -> Font {
+        .system(size: size, weight: weight, design: .rounded)
+    }
+
+    /// The phase colour. Overtime is green, an imminent change is amber.
     private var phaseColor: Color {
         if engine.inOvertime { return Theme.recover }
-        return engine.isWarning ? Theme.steady : Theme.color(for: engine.currentPhase.kind)
+        return engine.isWarning ? Theme.warning : Theme.color(for: engine.currentPhase.kind)
+    }
+
+    /// The background tint never switches to amber — it tracks the *phase*.
+    private var backgroundColor: Color {
+        engine.inOvertime ? Theme.recover : Theme.color(for: engine.currentPhase.kind)
+    }
+
+    private var editorOpen: Bool {
+        editorOverride ?? (engine.currentPhase.kind == .recover || engine.currentPhase.kind == .steady)
+    }
+
+    private var pastWorkIndices: [Int] {
+        Array(engine.plan.phases.indices
+            .filter { $0 < engine.phaseIndex && engine.plan.phases[$0].kind == .work }
+            .suffix(3))
     }
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            LinearGradient(colors: [phaseColor.opacity(0.42), .black],
-                           startPoint: .top, endPoint: .bottom)
+            Color(hex: 0x05070C).ignoresSafeArea()
+            RadialGradient(colors: [backgroundColor.opacity(0.30), .clear],
+                           center: .top, startRadius: 0, endRadius: 520)
                 .ignoresSafeArea()
-                .animation(.easeInOut(duration: 0.6), value: phaseColor)
+                .animation(.easeInOut(duration: 0.6), value: backgroundColor)
 
-            VStack(spacing: 12) {
-                header
-                ring
-                targetSection
-                Spacer(minLength: 0)
-                hrGraphCard
-                controls
+            VStack(spacing: 0) {
+                statsCard
+                spine.padding(.top, 14)
+                if editorOpen, !pastWorkIndices.isEmpty { effortEditor.padding(.top, 12) }
+                ring.padding(.top, 14)
+                targetCard.padding(.top, 14)
+                Spacer(minLength: 12)
+                hrPanel.padding(.top, 22)
+                controls.padding(.top, 16)
             }
-            .padding()
+            .padding(.horizontal, 22)
+            .padding(.top, 16)
         }
         .preferredColorScheme(.dark)
+        .animation(.easeInOut(duration: 0.25), value: editorOpen)
+        .onChange(of: engine.phaseIndex) { _, _ in
+            editorOverride = nil
+        }
         .confirmationDialog(engine.inOvertime ? "Finish and save?" : "End this workout?",
                             isPresented: $showEndConfirm, titleVisibility: .visible) {
             Button(engine.inOvertime ? "Finish & save" : "End workout",
@@ -104,164 +139,222 @@ struct ActiveWorkoutView: View {
         }
     }
 
-    // MARK: - Header: corners + interval wheel
+    // MARK: Stats card
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("ELAPSED")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.5))
-                Text(clockString(engine.totalElapsed))
-                    .font(.headline)
+    private var statsCard: some View {
+        HStack(spacing: 0) {
+            statBlock("REMAINING",
+                      engine.inOvertime ? "+\(clockString(engine.overtimeSeconds))" : clockString(engine.totalRemaining),
+                      .white)
+            Divider().frame(height: 34).overlay(Color.white.opacity(0.10)).padding(.horizontal, 16)
+            statBlock("EFFORT", "\(engine.workEffortsDone)/\(engine.plan.workPhaseCount)", phaseColor)
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(secondaryStatsLabel)
+                    .font(Self.labelFont).tracking(1.7)
+                    .foregroundStyle(.white.opacity(0.4))
+                Text(secondaryStatsText)
+                    .font(.system(size: 16, weight: .semibold))
                     .monospacedDigit()
-                    .foregroundStyle(.white)
-                Text("Effort \(engine.workEffortsDone)/\(engine.plan.workPhaseCount)")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(phaseColor)
-                    .padding(.top, 2)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(.top, 3)
             }
-            .frame(width: 74, alignment: .leading)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(surface(tint: .white.opacity(0.055)))
+    }
 
-            intervalWheel
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("REMAINING")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.5))
-                Text(clockString(engine.totalRemaining))
-                    .font(.headline)
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-                if engine.inOvertime {
-                    Text("+\(clockString(engine.overtimeSeconds))")
-                        .font(.caption2.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.recover)
-                        .padding(.top, 2)
-                }
-            }
-            .frame(width: 74, alignment: .trailing)
+    private func statBlock(_ title: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(Self.labelFont).tracking(1.7)
+                .foregroundStyle(.white.opacity(0.4))
+            Text(value)
+                .font(numerals(26))
+                .monospacedDigit()
+                .foregroundStyle(color)
         }
     }
 
-    /// Past above (dimmed, tappable to correct), current highlighted, next
-    /// below — auto-scrolls as the workout advances.
-    private var intervalWheel: some View {
-        ScrollViewReader { proxy in
-            ScrollView(showsIndicators: false) {
-                LazyVStack(spacing: 4) {
-                    Color.clear.frame(height: 44)
-                    ForEach(Array(engine.plan.phases.enumerated()), id: \.element.id) { index, phase in
-                        wheelRow(index: index, phase: phase)
-                            .id(phase.id)
+    private var secondaryStatsLabel: String {
+        if engine.plan.equipment == .bike { return "KCAL" }
+        return settings.value.useMetric ? "KCAL · KM" : "KCAL · MI"
+    }
+
+    private var secondaryStatsText: String {
+        let estimate = liveEstimate
+        let distance = settings.value.useMetric ? estimate.meters / 1000 : estimate.meters / 1609.34
+        if engine.plan.equipment == .bike {
+            return String(format: "%.0f", estimate.kcal)
+        }
+        return String(format: "%.0f · %.1f", estimate.kcal, distance)
+    }
+
+    /// Calories and distance so far, from the targets actually being run.
+    private var liveEstimate: (kcal: Double, meters: Double) {
+        var records: [PhaseRecord] = []
+        for (index, phase) in engine.plan.phases.enumerated() {
+            let seconds: Double
+            if index < engine.phaseIndex {
+                seconds = engine.actualSeconds[index]
+            } else if index == engine.phaseIndex {
+                seconds = engine.inOvertime ? engine.phaseElapsed : min(engine.phaseElapsed, phase.seconds)
+            } else {
+                seconds = 0
+            }
+            guard seconds > 0 else { continue }
+            let target = engine.appliedTargets[index]
+            records.append(PhaseRecord(kind: phase.kind.rawValue,
+                                       label: phase.label,
+                                       plannedSeconds: phase.seconds,
+                                       actualSeconds: seconds,
+                                       speedMph: target.speedMph,
+                                       inclinePercent: target.inclinePercent,
+                                       resistance: target.resistance))
+        }
+        return MetabolicMath.estimate(records: records,
+                                      equipment: engine.plan.equipment,
+                                      machine: settings.machine(for: engine.plan.equipment),
+                                      weightKg: settings.value.weightKg)
+    }
+
+    // MARK: Plan spine — replaces the scrolling interval wheel
+
+    private var spine: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GeometryReader { geo in
+                let gap: CGFloat = 2
+                let phases = engine.plan.phases
+                let usable = max(0, geo.size.width - gap * CGFloat(max(0, phases.count - 1)))
+                let total = max(1, engine.plan.totalSeconds)
+                HStack(spacing: gap) {
+                    ForEach(Array(phases.enumerated()), id: \.element.id) { index, phase in
+                        let isCurrent = index == engine.phaseIndex
+                        Capsule()
+                            .fill(segmentColor(index: index, phase: phase))
+                            .frame(width: max(4, usable * CGFloat(phase.seconds / total)),
+                                   height: isCurrent ? 14 : 7)
+                            .shadow(color: isCurrent ? phaseColor.opacity(0.9) : .clear, radius: 8)
                     }
-                    Color.clear.frame(height: 44)
                 }
+                .frame(height: 14, alignment: .center)
             }
-            .frame(height: 140)
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .black, location: 0.18),
-                        .init(color: .black, location: 0.82),
-                        .init(color: .clear, location: 1),
-                    ],
-                    startPoint: .top, endPoint: .bottom))
-            .onAppear {
-                proxy.scrollTo(engine.currentPhase.id, anchor: .center)
-            }
-            .onChange(of: engine.phaseIndex) { _, _ in
-                withAnimation(.easeInOut(duration: 0.35)) {
-                    proxy.scrollTo(engine.currentPhase.id, anchor: .center)
-                }
-            }
-        }
-    }
-
-    private func wheelRow(index: Int, phase: IntervalPhase) -> some View {
-        let isCurrent = index == engine.phaseIndex
-        let isPast = index < engine.phaseIndex
-        let isNextDuringWarning = engine.isWarning && index == engine.phaseIndex + 1
-        let target = engine.appliedTargets[index]
-        let canCorrect = isPast && phase.kind == .work
-
-        return Button {
-            if canCorrect { adjustingPhase = AdjustTargetRequest(index: index) }
-        } label: {
-            HStack(spacing: 8) {
-                if isPast {
-                    Image(systemName: "checkmark")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .frame(width: 12)
-                } else {
-                    Circle()
-                        .fill(Theme.color(for: phase.kind))
-                        .frame(width: 7, height: 7)
-                        .frame(width: 12)
-                }
-                Text(phase.label)
-                    .font(isCurrent ? .footnote.weight(.bold) : .caption2)
-                    .foregroundStyle(.white.opacity(isCurrent ? 1 : 0.75))
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text(primaryText(target))
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(1)
-                Text(clockString(phase.seconds))
-                    .font(.caption2)
-                    .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.55))
-                if canCorrect {
-                    Image(systemName: "pencil.circle")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.4))
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .frame(height: 14)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
             .background(
-                isCurrent ? Color.white.opacity(0.14)
-                    : isNextDuringWarning ? Theme.steady.opacity(0.18)
-                    : Color.clear,
-                in: RoundedRectangle(cornerRadius: 8))
-            .opacity(isPast ? 0.5 : 1)
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(engine.isWarning ? Theme.warning.opacity(0.10) : Color.white.opacity(0.04))
+                    .overlay(RoundedRectangle(cornerRadius: 14)
+                        .stroke(engine.isWarning ? Theme.warning.opacity(0.30) : Color.white.opacity(0.06),
+                                lineWidth: 1)))
+            .contentShape(Rectangle())
+            .onTapGesture { editorOverride = !editorOpen }
+
+            HStack {
+                Text(spineCaption)
+                    .font(Self.labelFont).tracking(1.7)
+                    .foregroundStyle(engine.isWarning ? Theme.warning : .white.opacity(0.3))
+                Spacer()
+            }
+            .padding(.horizontal, 4)
         }
-        .buttonStyle(.plain)
-        .disabled(!canCorrect)
     }
 
-    // MARK: - Ring
+    private func segmentColor(index: Int, phase: IntervalPhase) -> Color {
+        if index == engine.phaseIndex { return phaseColor }
+        if index < engine.phaseIndex { return Theme.color(for: phase.kind).opacity(0.55) }
+        return .white.opacity(0.13)
+    }
+
+    private var spineCaption: String {
+        if engine.inOvertime { return "COMPLETE" }
+        if engine.isWarning, let next = engine.nextPhase { return "\(next.kind.title.uppercased()) NEXT" }
+        return "\(engine.plan.name.uppercased()) · \(engine.plan.minutes) MIN"
+    }
+
+    // MARK: Effort editor (auto-opens during recoveries)
+
+    private var effortEditor: some View {
+        VStack(spacing: 0) {
+            ForEach(pastWorkIndices, id: \.self) { index in
+                Button {
+                    adjustingPhase = AdjustTargetRequest(index: index)
+                } label: {
+                    HStack(spacing: 10) {
+                        Text(engine.plan.phases[index].label)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.75))
+                        Spacer(minLength: 8)
+                        Text(primaryText(engine.appliedTargets[index]))
+                            .font(.system(size: 14, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(.white.opacity(0.6))
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .frame(width: 30, height: 30)
+                            .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 9))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                }
+                .buttonStyle(.plain)
+                if index != pastWorkIndices.last {
+                    Divider().overlay(Color.white.opacity(0.07))
+                }
+            }
+        }
+        .background(surface(tint: .white.opacity(0.07), radius: 18))
+    }
+
+    // MARK: Ring — thin outer arc = whole session, thick inner = this phase
 
     private var ring: some View {
         ZStack {
             Circle()
-                .stroke(Color.white.opacity(0.12), lineWidth: 12)
+                .fill(RadialGradient(colors: [phaseColor.opacity(0.20), .clear],
+                                     center: .center, startRadius: 0, endRadius: 125))
+                .padding(26)
+
+            Circle().stroke(Color.white.opacity(0.07), lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: sessionProgress)
+                .stroke(Color.white.opacity(0.5), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+
+            Circle().stroke(Color.white.opacity(0.10), lineWidth: 16).padding(14.5)
             Circle()
                 .trim(from: 0, to: engine.phaseProgress)
-                .stroke(phaseColor, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                .stroke(phaseColor, style: StrokeStyle(lineWidth: 16, lineCap: .round))
                 .rotationEffect(.degrees(-90))
+                .padding(14.5)
                 .animation(.linear(duration: 0.1), value: engine.phaseProgress)
-            VStack(spacing: 2) {
+
+            VStack(spacing: 5) {
                 Text(ringTitle)
-                    .font(.caption.weight(.bold))
-                    .tracking(1.5)
+                    .font(.system(size: 10.5, weight: engine.isWarning ? .bold : .semibold))
+                    .tracking(3.4)
                     .foregroundStyle(phaseColor)
-                Text(engine.inOvertime ? "+\(clockString(engine.overtimeSeconds))" : countdownString(engine.phaseRemaining))
-                    .font(.system(size: 44, weight: .heavy, design: .rounded))
+                Text(ringValue)
+                    .font(numerals(engine.isWarning ? 104 : 84, .heavy))
                     .monospacedDigit()
                     .foregroundStyle(.white)
-                Text(ringSubtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(1)
+                if let cue = ringSubtitle {
+                    Text(cue)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                }
             }
         }
-        .frame(maxWidth: 185)
+        .frame(maxWidth: 250)
         .aspectRatio(1, contentMode: .fit)
+    }
+
+    private var sessionProgress: Double {
+        min(1, engine.totalElapsed / max(1, engine.plan.totalSeconds))
     }
 
     private var ringTitle: String {
@@ -270,145 +363,242 @@ struct ActiveWorkoutView: View {
         return engine.currentPhase.kind.title.uppercased()
     }
 
-    private var ringSubtitle: String {
+    private var ringValue: String {
+        if engine.inOvertime { return clockString(engine.overtimeSeconds) }
+        if engine.isWarning { return "\(max(1, Int(engine.phaseRemaining.rounded(.up))))" }
+        return countdownString(engine.phaseRemaining)
+    }
+
+    private var ringSubtitle: String? {
         if engine.state == .paused { return "Paused" }
-        if engine.inOvertime { return "Keep moving — stop when you're done" }
+        if engine.inOvertime || engine.isWarning { return nil }
         return engine.currentPhase.cue
     }
 
-    // MARK: - Target (primary metric with ±, secondary on its own line)
+    // MARK: Target card
 
-    private var targetSection: some View {
-        VStack(spacing: 5) {
-            HStack(spacing: 18) {
-                if adjustable {
-                    adjustButton(systemName: "minus") { engine.adjustCurrentTarget(up: false) }
+    private var targetCard: some View {
+        Group {
+            if engine.isWarning, let next = engine.nextTarget, let nextPhase = engine.nextPhase {
+                VStack(spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(primaryText(engine.currentTarget))
+                            .font(numerals(28, .semibold))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .strikethrough(true, color: .white.opacity(0.4))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.5))
+                        Text(primaryText(next))
+                            .font(numerals(56, .heavy))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                    }
+                    Text("\(nextPhase.kind.title.uppercased()) · \(clockString(nextPhase.seconds))")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.color(for: nextPhase.kind))
                 }
-                Text(primaryText(engine.currentTarget))
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                if adjustable {
-                    adjustButton(systemName: "plus") { engine.adjustCurrentTarget(up: true) }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .padding(.horizontal, 14)
+                .background(surface(tint: Theme.warning.opacity(0.14),
+                                    stroke: Theme.warning.opacity(0.42)))
+            } else {
+                HStack(spacing: 14) {
+                    if adjustable {
+                        stepper("minus") { engine.adjustCurrentTarget(up: false) }
+                    }
+                    VStack(spacing: 2) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(primaryText(engine.currentTarget))
+                                .font(numerals(44))
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
+                            if let secondary = secondaryText(engine.currentTarget) {
+                                Text(secondary)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+                        }
+                        if engine.currentTargetAdjusted {
+                            Text("plan \(primaryText(engine.currentPhase.target))")
+                                .font(Self.labelFont).tracking(1.7)
+                                .foregroundStyle(.white.opacity(0.45))
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    if adjustable {
+                        stepper("plus") { engine.adjustCurrentTarget(up: true) }
+                    }
                 }
-            }
-            if let secondary = secondaryText(engine.currentTarget) {
-                Text(secondary)
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.65))
-            }
-            if engine.currentTargetAdjusted {
-                Text("adjusted — plan was \(primaryText(engine.currentPhase.target))")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.5))
+                .padding(.vertical, 12)
+                .padding(.horizontal, 14)
+                .background(surface(tint: phaseColor.opacity(0.08),
+                                    stroke: phaseColor.opacity(0.22)))
             }
         }
     }
 
-    private func adjustButton(systemName: String, action: @escaping () -> Void) -> some View {
+    private func stepper(_ systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.headline)
-                .frame(width: 38, height: 38)
-                .background(.white.opacity(0.1), in: Circle())
+                .font(.system(size: 20, weight: .light))
+                .frame(width: 50, height: 50)
+                .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                 .foregroundStyle(.white)
         }
+        .buttonStyle(.plain)
     }
 
     private var adjustable: Bool {
-        if engine.plan.equipment == .bike {
-            return engine.currentTarget.resistance != nil
-        }
-        return engine.currentTarget.speedMph != nil
+        engine.plan.equipment == .bike
+            ? engine.currentTarget.resistance != nil
+            : engine.currentTarget.speedMph != nil
     }
 
     private func primaryText(_ target: PhaseTarget) -> String {
         if engine.plan.equipment == .bike {
-            if let resistance = target.resistance { return "Resistance \(resistance)" }
+            if let resistance = target.resistance { return "\(resistance)" }
         } else if let speed = target.speedMph {
-            return settings.speedString(speed)
+            return String(format: "%.1f", settings.value.useMetric ? speed * 1.60934 : speed)
         }
         return target.effortWords
     }
 
     private func secondaryText(_ target: PhaseTarget) -> String? {
-        if engine.plan.equipment == .bike {
-            if let cadence = target.cadenceRPM { return "\(cadence) rpm" }
-            return nil
+        switch engine.plan.equipment {
+        case .bike:
+            if let cadence = target.cadenceRPM { return "resist · \(cadence) rpm" }
+            return "resistance"
+        case .outdoor:
+            return (settings.value.useMetric ? "km/h · " : "mph · ") + target.effortWords
+        case .treadmill:
+            let unit = settings.value.useMetric ? "km/h" : "mph"
+            if let incline = target.inclinePercent, incline > 0.5 {
+                return String(format: "%@ · %.0f%%", unit, incline)
+            }
+            return unit
         }
-        if engine.plan.equipment == .outdoor {
-            return target.effortWords
-        }
-        if let incline = target.inclinePercent, incline > 0.5 {
-            return String(format: "%.0f%% incline", incline)
-        }
-        return nil
     }
 
-    // MARK: - Heart-rate graph
+    // MARK: Heart-rate panel — neutral gridlines, gradient fill, real axes
 
-    /// Fills across the planned duration as the workout runs; the axis
-    /// extends live once the session goes into overtime.
-    private var hrGraphCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "heart.fill")
-                    .foregroundStyle(.red)
-                if let hr = engine.latestHR, let date = engine.latestHRDate,
-                   Date().timeIntervalSince(date) < 30 {
+    private var hrPanel: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(Color(hex: 0xFF3B30))
+                    .frame(width: 8, height: 8)
+                    .shadow(color: Color(hex: 0xFF3B30).opacity(0.9), radius: 5)
+                if let hr = liveHR {
                     Text("\(Int(hr))")
-                        .font(.title3.weight(.bold))
+                        .font(numerals(28))
                         .monospacedDigit()
                         .foregroundStyle(.white)
+                    Text("BPM")
+                        .font(Self.labelFont).tracking(1.7)
+                        .foregroundStyle(.white.opacity(0.4))
                     if let maxHR = engine.maxHR {
-                        Text(HeartRateZone.zone(forPercent: hr / maxHR * 100).label)
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(.white.opacity(0.12), in: Capsule())
-                            .foregroundStyle(.white.opacity(0.85))
+                        Text(HeartRateZone.zone(forPercent: hr / maxHR * 100).label.uppercased())
+                            .font(Self.labelFont).tracking(1.7)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Theme.warning.opacity(0.16), in: RoundedRectangle(cornerRadius: 7))
+                            .foregroundStyle(Color(hex: 0xFFC470))
+                            .fixedSize()
                     }
                 } else {
                     Text("– –")
-                        .font(.title3.weight(.bold))
+                        .font(numerals(28))
+                        .foregroundStyle(.white.opacity(0.35))
+                    Text(hrHint)
+                        .font(Self.labelFont).tracking(1.4)
                         .foregroundStyle(.white.opacity(0.4))
+                        .lineLimit(2)
                 }
-                Spacer()
-                Text(engine.coachMessage.isEmpty ? hrHint : engine.coachMessage)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.6))
-                    .multilineTextAlignment(.trailing)
-                    .lineLimit(2)
+                Spacer(minLength: 6)
+                if let summary = hrSummary {
+                    Text(summary)
+                        .font(Self.labelFont).tracking(1.7)
+                        .foregroundStyle(.white.opacity(0.35))
+                        .fixedSize()
+                }
             }
+
             if engine.hrHistory.count >= 2 {
                 Chart {
                     ForEach(engine.hrHistory, id: \.date) { sample in
+                        AreaMark(
+                            x: .value("Minutes", sample.date.timeIntervalSince(engine.startDate) / 60),
+                            y: .value("BPM", sample.bpm))
+                            .interpolationMethod(.monotone)
+                            .foregroundStyle(.linearGradient(
+                                colors: [Color(hex: 0xFF3B30).opacity(0.40), Color(hex: 0xFF3B30).opacity(0)],
+                                startPoint: .top, endPoint: .bottom))
                         LineMark(
                             x: .value("Minutes", sample.date.timeIntervalSince(engine.startDate) / 60),
                             y: .value("BPM", sample.bpm))
-                            .foregroundStyle(.red)
                             .interpolationMethod(.monotone)
-                            .lineStyle(StrokeStyle(lineWidth: 2))
+                            .foregroundStyle(Color(hex: 0xFF3B30))
+                            .lineStyle(StrokeStyle(lineWidth: 2.5))
                     }
-                    if engine.inOvertime {
-                        RuleMark(x: .value("Planned", engine.plan.totalSeconds / 60))
-                            .foregroundStyle(.white.opacity(0.25))
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    if let hr = engine.latestHR, let date = engine.latestHRDate {
+                        PointMark(x: .value("Minutes", date.timeIntervalSince(engine.startDate) / 60),
+                                  y: .value("BPM", hr))
+                            .symbolSize(70)
+                            .foregroundStyle(Color(hex: 0xFF3B30))
                     }
                 }
                 .chartXScale(domain: 0...graphMaxMinutes)
                 .chartYScale(domain: graphYDomain)
-                .chartXAxis(.hidden)
-                .chartYAxis(.hidden)
-                .frame(height: 62)
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: yAxisValues) { value in
+                        AxisGridLine().foregroundStyle(.white.opacity(0.055))
+                        AxisValueLabel {
+                            if let bpm = value.as(Double.self) {
+                                Text("\(Int(bpm))")
+                                    .font(Self.labelFont)
+                                    .foregroundStyle(.white.opacity(0.32))
+                            }
+                        }
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(values: xAxisValues) { value in
+                        AxisValueLabel {
+                            if let minutes = value.as(Double.self) {
+                                Text("\(Int(minutes))")
+                                    .font(Self.labelFont).tracking(1.1)
+                                    .foregroundStyle(.white.opacity(0.28))
+                            }
+                        }
+                    }
+                }
+                .frame(height: 116)
             } else {
-                Text("Your heart-rate curve draws here across the whole workout")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.35))
-                    .frame(maxWidth: .infinity, minHeight: 40)
+                Text("Heart-rate curve draws here")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .frame(maxWidth: .infinity, minHeight: 116)
             }
         }
-        .padding(12)
-        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 15)
+        .padding(.top, 13)
+        .padding(.bottom, 10)
+        .background(surface(tint: .white.opacity(0.055)))
+    }
+
+    private var liveHR: Double? {
+        guard let hr = engine.latestHR, let date = engine.latestHRDate,
+              Date().timeIntervalSince(date) < 30 else { return nil }
+        return hr
+    }
+
+    private var hrSummary: String? {
+        let values = engine.hrHistory.map(\.bpm)
+        guard let hi = values.max(), !values.isEmpty else { return nil }
+        let avg = values.reduce(0, +) / Double(values.count)
+        return String(format: "AVG %.0f · MAX %.0f", avg, hi)
     }
 
     private var graphMaxMinutes: Double {
@@ -416,68 +606,94 @@ struct ActiveWorkoutView: View {
     }
 
     private var graphYDomain: ClosedRange<Double> {
-        let values = engine.hrHistory.map { $0.bpm }
-        guard let lo = values.min(), let hi = values.max() else { return 60...180 }
-        return max(35, lo - 12)...(hi + 15)
+        let values = engine.hrHistory.map(\.bpm)
+        guard let lo = values.min(), let hi = values.max() else { return 110...185 }
+        return max(40, lo - 12)...(hi + 15)
+    }
+
+    /// Four round bpm gridlines inside whatever range is in play.
+    private var yAxisValues: [Double] {
+        let lower = graphYDomain.lowerBound, upper = graphYDomain.upperBound
+        let step = max(10, ((upper - lower) / 4 / 10).rounded() * 10)
+        let start = (lower / step).rounded(.up) * step
+        return (0..<4).map { start + Double($0) * step }.filter { $0 < upper }
+    }
+
+    private var xAxisValues: [Double] {
+        let total = graphMaxMinutes
+        let step = total > 40 ? 15.0 : (total > 20 ? 10.0 : 5.0)
+        return Array(stride(from: 0, through: total, by: step))
     }
 
     private var hrHint: String {
         switch ble.status {
-        case .connected(let name):
-            return "Live from \(name)"
-        case .connecting(let name):
-            return "Connecting to \(name)…"
-        case .bluetoothOff:
-            return "Bluetooth is off — your monitor can't connect"
-        default:
-            return "For live HR: pair a strap in Settings, or start a Watch workout"
+        case .connected(let name): return "LIVE FROM \(name.uppercased())"
+        case .connecting(let name): return "CONNECTING TO \(name.uppercased())…"
+        case .bluetoothOff: return "BLUETOOTH IS OFF"
+        default: return "NO LIVE HR"
         }
     }
 
-    // MARK: - Controls
+    // MARK: Controls
 
     private var controls: some View {
-        HStack(spacing: 40) {
+        HStack(spacing: 34) {
             Button {
                 showEndConfirm = true
             } label: {
                 Image(systemName: engine.inOvertime ? "checkmark" : "xmark")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 54, height: 54)
-                    .background(engine.inOvertime ? Theme.recover.opacity(0.35) : .white.opacity(0.1), in: Circle())
-                    .foregroundStyle(.white)
+                    .font(.system(size: 21, weight: .regular))
+                    .frame(width: 56, height: 56)
+                    .background(engine.inOvertime ? Theme.recover.opacity(0.35) : .white.opacity(0.06),
+                                in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.09), lineWidth: 1))
+                    .foregroundStyle(.white.opacity(0.85))
             }
             Button {
-                if engine.state == .paused {
-                    engine.resume()
-                } else {
-                    engine.pause()
-                }
+                engine.state == .paused ? engine.resume() : engine.pause()
             } label: {
                 Image(systemName: engine.state == .paused ? "play.fill" : "pause.fill")
-                    .font(.title.weight(.semibold))
-                    .frame(width: 72, height: 72)
+                    .font(.system(size: 26, weight: .semibold))
+                    .frame(width: 74, height: 74)
                     .background(.white.opacity(0.16), in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.14), lineWidth: 1))
                     .foregroundStyle(.white)
             }
             Button {
                 engine.skip()
             } label: {
                 Image(systemName: "forward.end.fill")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 54, height: 54)
-                    .background(.white.opacity(0.1), in: Circle())
-                    .foregroundStyle(.white)
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(width: 56, height: 56)
+                    .background(.white.opacity(0.06), in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.09), lineWidth: 1))
+                    .foregroundStyle(.white.opacity(0.85))
             }
             .opacity(engine.inOvertime ? 0.3 : 1)
             .disabled(engine.inOvertime)
         }
         .padding(.bottom, 4)
     }
+
+    // MARK: Shared surface style — specular top edge + soft drop shadow
+
+    private func surface(tint: Color,
+                         stroke: Color = .white.opacity(0.08),
+                         radius: CGFloat = 20) -> some View {
+        RoundedRectangle(cornerRadius: radius)
+            .fill(tint)
+            .overlay(RoundedRectangle(cornerRadius: radius).stroke(stroke, lineWidth: 1))
+            .overlay(
+                RoundedRectangle(cornerRadius: radius)
+                    .strokeBorder(.white.opacity(0.09), lineWidth: 1)
+                    .mask(LinearGradient(colors: [.white, .clear],
+                                         startPoint: .top, endPoint: .center)))
+            .shadow(color: .black.opacity(0.35), radius: 13, y: 10)
+    }
 }
 
 /// "That sprint was actually faster/slower": corrects a completed effort and
-/// recalibrates the rest of the workout (and next session's starting point).
+/// recalibrates the rest of the workout.
 struct AdjustPastTargetSheet: View {
     let engine: WorkoutEngine
     let index: Int
@@ -510,17 +726,21 @@ struct AdjustPastTargetSheet: View {
                         .background(Color(.secondarySystemBackground), in: Circle())
                 }
             }
-            Text("What did you actually do? This corrects the record and updates the rest of today's efforts — and where next session starts.")
+            Text("Applies to the rest of today's efforts and next session.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("Done") { dismiss() }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12))
-                .foregroundStyle(.white)
-                .buttonStyle(.plain)
+            Button {
+                dismiss()
+            } label: {
+                Text("Done")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
         }
         .padding(20)
     }

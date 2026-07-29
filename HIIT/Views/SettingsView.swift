@@ -30,9 +30,9 @@ struct SettingsView: View {
                 } header: {
                     Text("Live heart rate")
                 } footer: {
-                    Text("Works with any watch or chest strap that broadcasts standard Bluetooth heart rate (Amazfit, Polar, Garmin, Coospo…). Pair once and every workout connects automatically. Apple Watch users can skip this — just start any workout on the Watch.")
+                    Text("Any strap or watch that broadcasts Bluetooth heart rate. Apple Watch: just start a workout on the Watch instead.")
                 }
-                Section("Training") {
+                Section {
                     Picker("Experience", selection: experienceBinding) {
                         ForEach(ExperienceLevel.allCases) { level in
                             Text(level.label).tag(level)
@@ -45,6 +45,10 @@ struct SettingsView: View {
                     }
                     Toggle("Sound cues", isOn: $store.value.soundOn)
                     Toggle("Haptic cues", isOn: $store.value.hapticsOn)
+                } header: {
+                    Text("Training")
+                } footer: {
+                    Text("Experience adjusts automatically from your results.")
                 }
 
                 Section("Equipment") {
@@ -69,7 +73,7 @@ struct SettingsView: View {
                 } header: {
                     Text("AI Coach (optional)")
                 } footer: {
-                    Text("Adds an 'Ask the AI coach' button after workouts and in History. Your key is stored in the device Keychain and only ever sent directly to Anthropic. Get one at console.anthropic.com — usage is billed to your account.")
+                    Text("Key stays in the device Keychain, sent only to Anthropic. Get one at console.anthropic.com.")
                 }
 
                 Section {
@@ -80,7 +84,7 @@ struct SettingsView: View {
                 } header: {
                     Text("About")
                 } footer: {
-                    Text("HIIT Coach offers general fitness guidance, not medical advice. Stop any session that causes pain, dizziness, or chest discomfort, and talk to a doctor before starting a new exercise program.")
+                    Text("Not medical advice. Stop any session that causes pain, dizziness, or chest discomfort.")
                 }
             }
             .navigationTitle("Settings")
@@ -141,9 +145,9 @@ struct SettingsView: View {
             Text("Profile")
         } footer: {
             if settings.value.healthConnected {
-                Text("Synced from Apple Health\(lastSyncText). Update values in the Health app, then refresh here. Age sets your heart-rate zones; weight drives calorie estimates; resting HR calibrates starting intensity.")
+                Text("Synced from Apple Health\(lastSyncText). Edit in the Health app, then refresh.")
             } else {
-                Text("Best experience: connect Apple Health and this fills itself in. Age sets your heart-rate zones; weight drives calorie estimates; resting HR calibrates starting intensity.")
+                Text("Connect Apple Health to fill this in automatically.")
             }
         }
     }
@@ -289,8 +293,8 @@ struct MaxHRSheet: View {
                     }
                     .pickerStyle(.wheel)
                 } else {
-                    LabeledContent("Estimated", value: settings.maxHR.map { "\(Int($0)) bpm" } ?? "add your age first")
-                    Text("Uses the Tanaka formula (208 − 0.7 × age). Only set a custom value if you know your real max from a fitness test or a Watch-measured hard effort.")
+                    LabeledContent("Estimated", value: settings.maxHR.map { "\(Int($0)) bpm" } ?? "needs age")
+                    Text("Tanaka estimate (208 − 0.7 × age). Set a custom value only if you know your true max.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
