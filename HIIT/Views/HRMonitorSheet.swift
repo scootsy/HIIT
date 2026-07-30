@@ -52,6 +52,13 @@ struct HRMonitorSheet: View {
                 pendingMonitor = nil
             }
         }
+        .onChange(of: ble.status) { _, newStatus in
+            // A timed-out attempt clears the tapped row's "Connecting…" so the
+            // list is honest about needing another tap.
+            if case .failed = newStatus {
+                pendingMonitor = nil
+            }
+        }
     }
 
     private func savedSection(name: String) -> some View {
@@ -91,6 +98,7 @@ struct HRMonitorSheet: View {
         switch ble.status {
         case .connected: return "Connected"
         case .connecting: return "Connecting…"
+        case .failed: return "Couldn't connect — make sure it's awake and broadcasting"
         case .bluetoothOff: return "Bluetooth is off — turn it on in Control Center"
         case .unauthorized: return "Bluetooth access is off — allow it in Settings → HIIT Coach"
         default: return "Not connected"
@@ -115,6 +123,11 @@ struct HRMonitorSheet: View {
                 Label("Bluetooth access is turned off for this app. Allow it in Settings → HIIT Coach → Bluetooth.", systemImage: "exclamationmark.triangle")
                     .font(.footnote)
             default:
+                if case .failed(let name) = ble.status {
+                    Label("Couldn't connect to \(name). Make sure it's awake and broadcasting, then tap it to try again.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                }
                 if ble.discovered.isEmpty {
                     HStack(spacing: 10) {
                         ProgressView()

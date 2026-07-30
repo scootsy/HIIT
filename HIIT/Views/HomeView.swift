@@ -113,8 +113,10 @@ struct HomeView: View {
         let thisWeek = sessions.filter { $0.date >= weekAgo }
         let minutes = Int(thisWeek.reduce(0) { $0 + $1.totalSeconds } / 60)
         let kcal = Int(thisWeek.reduce(0) { $0 + $1.estimatedCalories })
+        // A rolling 7-day window, and labeled as such — "This week" implied
+        // the calendar week the History chart actually uses.
         return HStack(spacing: 10) {
-            StatTile(title: "This week", value: "\(thisWeek.count)", subtitle: "sessions")
+            StatTile(title: "Sessions", value: "\(thisWeek.count)", subtitle: "last 7 days")
             StatTile(title: "Minutes", value: "\(minutes)", subtitle: "last 7 days")
             StatTile(title: "Energy", value: "\(kcal)", subtitle: "kcal (est.)")
         }

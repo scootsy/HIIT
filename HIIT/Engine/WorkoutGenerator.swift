@@ -96,7 +96,10 @@ enum WorkoutGenerator {
             name = "Pyramid"
             focus = "Efforts climb, peak, then descend — teaches pacing and keeps the middle honest."
         case .norwegian:
-            name = "Norwegian 4×4"
+            // Name the session by the reps that actually fit: 4 rounds need
+            // ~33 minutes, so a 26–32 minute budget honestly gets a "3×4".
+            let reps = corePhases.filter { $0.kind == .work }.count
+            name = "Norwegian \(reps)×4"
             focus = "Long 4-minute pushes at 85–95% of max heart rate — the classic VO₂max builder (Helgerud et al., 2007)."
         case .tenTwentyThirty:
             name = "10-20-30"
@@ -126,36 +129,58 @@ enum WorkoutGenerator {
             vibe: inputRaw.vibe,
             minutes: input.minutes,
             cueLeadSeconds: cueLead,
+            isDeload: deload,
             phases: phases)
     }
 
     // MARK: - Protocol selection
 
-    /// Rotates protocols session-to-session so training stays varied, gated by
-    /// experience, session length, and what the machine supports. Rapid speed
-    /// changes (10-20-30) are never assigned on a treadmill — belts can't keep up.
-    static func chooseProtocol(_ input: GeneratorInput) -> ProtocolKind {
-        if input.vibe == .easy { return .classic }
-        if input.minutes >= 26 && input.level != .beginner && input.sessionCount % 3 == 2 {
-            return .norwegian
-        }
+    /// The protocols this configuration can rotate through. Also used by the
+    /// setup UI to hide "Mix it up" when there is provably nothing to mix
+    /// (one candidate ⇒ every shuffle regenerates the identical plan).
+    static func candidateProtocols(_ inputRaw: GeneratorInput) -> [ProtocolKind] {
+        var input = inputRaw
+        if input.vibe == .auto && input.hardSessionsSinceEasy >= 5 { input.vibe = .easy }
+        if input.vibe == .easy { return [.classic] }
         switch input.equipment {
         case .treadmill:
             if input.level == .beginner {
-                return input.machine.hasIncline && input.sessionCount % 3 == 1 ? .hills : .classic
+                return input.machine.hasIncline ? [.classic, .hills] : [.classic]
             }
             var options: [ProtocolKind] = [.classic, .pyramid]
             if input.machine.hasIncline { options.append(.hills) }
-            return options[input.sessionCount % options.count]
+            if input.minutes >= 26 { options.append(.norwegian) }
+            return options
         case .bike:
-            if input.level == .beginner { return .classic }
-            let options: [ProtocolKind] = input.minutes >= 15 ? [.classic, .surges, .tenTwentyThirty, .pyramid] : [.classic, .surges]
-            return options[input.sessionCount % options.count]
+            if input.level == .beginner { return [.classic] }
+            var options: [ProtocolKind] = input.minutes >= 15 ? [.classic, .surges, .tenTwentyThirty, .pyramid] : [.classic, .surges]
+            if input.minutes >= 26 { options.append(.norwegian) }
+            return options
         case .outdoor:
-            if input.level == .beginner { return .classic }
-            let options: [ProtocolKind] = input.minutes >= 15 ? [.classic, .pyramid, .tenTwentyThirty] : [.classic, .pyramid]
-            return options[input.sessionCount % options.count]
+            if input.level == .beginner { return [.classic] }
+            var options: [ProtocolKind] = input.minutes >= 15 ? [.classic, .pyramid, .tenTwentyThirty] : [.classic, .pyramid]
+            if input.minutes >= 26 { options.append(.norwegian) }
+            return options
         }
+    }
+
+    /// Rotates protocols session-to-session so training stays varied, gated by
+    /// experience, session length, and what the machine supports. Rapid speed
+    /// changes (10-20-30) are never assigned on a treadmill — belts can't keep up.
+    ///
+    /// Norwegian rotates inside the candidate list rather than claiming a fixed
+    /// sessionCount residue: the old `% 3 == 2` slot shadowed whichever
+    /// protocol shared its index, leaving treadmill Hill Climbs and outdoor
+    /// 10-20-30 unreachable in every 26+ minute session.
+    static func chooseProtocol(_ input: GeneratorInput) -> ProtocolKind {
+        if input.vibe == .easy { return .classic }
+        // Beginner treadmills keep their gentler weighting: hills only every
+        // third session, classic otherwise.
+        if input.equipment == .treadmill && input.level == .beginner {
+            return input.machine.hasIncline && input.sessionCount % 3 == 1 ? .hills : .classic
+        }
+        let options = candidateProtocols(input)
+        return options[input.sessionCount % options.count]
     }
 
     // MARK: - Intensity targets
@@ -215,7 +240,7 @@ enum WorkoutGenerator {
         case .auto: break
         }
         // Progressive overload: each level step is worth +0.2 mph on the work speed.
-        work += 0.2 * input.progression
+        work += ProgressionEngine.speedPerLevelMph * input.progression
         easy += 0.05 * input.progression
 
         easy = max(1.5, min(easy, input.machine.maxSpeedMph - 1))
@@ -256,7 +281,7 @@ enum WorkoutGenerator {
         case .push: workFrac += 0.04
         case .auto: break
         }
-        workFrac += 0.015 * input.progression
+        workFrac += ProgressionEngine.resistanceFractionPerLevel * input.progression
         workFrac = max(0.45, min(0.9, workFrac))
         let easyFrac = 0.35
         let sprintFrac = min(0.95, workFrac + 0.12)
@@ -355,7 +380,7 @@ enum WorkoutGenerator {
         case .norwegian: return norwegianCore(core: core, input: input, kit: kit)
         case .tenTwentyThirty: return tenTwentyThirtyCore(core: core, input: input, kit: kit)
         case .hills: return hillsCore(core: core, input: input, kit: kit)
-        case .surges: return (surgesCore(core: core, input: input, kit: kit), .surges)
+        case .surges: return surgesCore(core: core, input: input, kit: kit)
         }
     }
 
@@ -490,12 +515,18 @@ enum WorkoutGenerator {
         return (phases, .hills)
     }
 
-    private static func surgesCore(core: Double, input: GeneratorInput, kit: TargetKit) -> [IntervalPhase] {
+    private static func surgesCore(core: Double, input: GeneratorInput, kit: TargetKit) -> (phases: [IntervalPhase], kind: ProtocolKind) {
         let work = 30.0
         let rec = 60.0
         let cycle = work + rec
         var n = Int(((core + rec) / cycle).rounded(.down))
         n = max(4, min(n, 16))
+        // The 4-surge minimum can't fit the shortest sessions — fall back to
+        // classic intervals (like every other builder) instead of overrunning
+        // the core and squeezing the cooldown to its floor.
+        if Double(n) * work + Double(n - 1) * rec > core {
+            return (classicCore(core: core, input: input, kit: kit), .classic)
+        }
         var phases: [IntervalPhase] = []
         for i in 1...n {
             phases.append(IntervalPhase(kind: .work, seconds: work, label: "Surge", cue: "Spin fast!", target: kit.surgeWork))
@@ -503,6 +534,6 @@ enum WorkoutGenerator {
                 phases.append(IntervalPhase(kind: .recover, seconds: rec, label: "Recover", cue: "Smooth and light", target: kit.easy))
             }
         }
-        return phases
+        return (phases, .surges)
     }
 }

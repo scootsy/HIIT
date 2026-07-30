@@ -24,7 +24,14 @@ struct RootView: View {
             WelcomeView()
         }
         .onAppear {
-            showStoreWarning = storeLoadFailed
+            // On a true first launch there is no history to have lost, and the
+            // welcome sheet owns the presentation slot — skip the warning.
+            showStoreWarning = storeLoadFailed && hasOnboarded
+            // With the store degraded to in-memory, "recovering" would write
+            // the session somewhere that evaporates at relaunch and then
+            // delete the checkpoint — the only durable copy. Keep the file
+            // for a healthy launch instead.
+            guard !storeLoadFailed else { return }
             // A leftover checkpoint means a workout was interrupted (crash,
             // jetsam, force-quit) before it could be saved — offer it back.
             if pendingCheckpoint == nil, let checkpoint = WorkoutCheckpoint.load() {
@@ -35,16 +42,17 @@ struct RootView: View {
                 }
             }
         }
-        .alert("Recover unsaved workout?", isPresented: recoveryBinding) {
-            Button("Save workout") { recoverCheckpoint() }
+        // presenting: hands the checkpoint value to the action closures at
+        // presentation time, so the save can't silently no-op if the
+        // isPresented binding nils pendingCheckpoint before the action runs.
+        .alert("Recover unsaved workout?", isPresented: recoveryBinding, presenting: pendingCheckpoint) { checkpoint in
+            Button("Save workout") { recoverCheckpoint(checkpoint) }
             Button("Discard", role: .destructive) {
                 WorkoutCheckpoint.clear()
                 pendingCheckpoint = nil
             }
-        } message: {
-            if let checkpoint = pendingCheckpoint {
-                Text("A \(Int(checkpoint.totalSeconds / 60))-minute \(checkpoint.plan.equipment.label.lowercased()) session from \(checkpoint.savedAt.formatted(date: .abbreviated, time: .shortened)) ended before it was saved.")
-            }
+        } message: { checkpoint in
+            Text("A \(Int(checkpoint.totalSeconds / 60))-minute \(checkpoint.plan.equipment.label.lowercased()) session from \(checkpoint.savedAt.formatted(date: .abbreviated, time: .shortened)) ended before it was saved.")
         }
         .alert("Workout history unavailable", isPresented: $showStoreWarning) {
             Button("OK", role: .cancel) {}
@@ -62,15 +70,16 @@ struct RootView: View {
                 set: { if !$0 { pendingCheckpoint = nil } })
     }
 
-    private func recoverCheckpoint() {
-        guard let checkpoint = pendingCheckpoint else { return }
+    private func recoverCheckpoint(_ checkpoint: WorkoutCheckpoint) {
         let result = checkpoint.makeResult(
             machine: settings.machine(for: checkpoint.plan.equipment),
             weightKg: settings.value.weightKg)
         let outcome = SessionSaver.save(result: result, rpe: nil, notes: "",
                                         context: context, settings: settings)
         pendingCheckpoint = nil
-        let session = outcome.session
+        // On failure the checkpoint file is untouched, so the next launch
+        // offers the recovery again instead of losing the session.
+        guard let session = outcome.session else { return }
         Task { @MainActor in
             let ok = await health.saveWorkout(result: result)
             session.savedToHealth = (ok == .saved)
