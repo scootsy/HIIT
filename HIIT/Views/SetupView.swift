@@ -20,6 +20,10 @@ struct SetupView: View {
     @State private var vibe: SessionVibe = .auto
     @State private var plan: WorkoutPlan? = nil
     @State private var shuffleOffset = 0
+    /// False when this configuration has exactly one candidate protocol —
+    /// shuffling would provably regenerate the identical plan, so the
+    /// "Mix it up" button hides instead of silently doing nothing.
+    @State private var canShuffle = true
 
     var body: some View {
         NavigationStack {
@@ -117,42 +121,7 @@ struct SetupView: View {
 
     private var machineStep: some View {
         Form {
-            if equipment == .treadmill {
-                Section("Speed") {
-                    VStack(alignment: .leading) {
-                        Text("Top speed you'd ever use: \(settings.speedString(machine.maxSpeedMph))")
-                            .font(.subheadline)
-                        Slider(value: $machine.maxSpeedMph, in: 5...15, step: 0.5)
-                    }
-                    Picker("Speed buttons react", selection: $machine.cueLeadSeconds) {
-                        Text("Fast (5s warning)").tag(5)
-                        Text("Normal (10s warning)").tag(10)
-                        Text("Slow (15s warning)").tag(15)
-                    }
-                }
-                Section("Incline") {
-                    Toggle("Has incline", isOn: $machine.hasIncline)
-                    if machine.hasIncline {
-                        VStack(alignment: .leading) {
-                            Text("Max incline: \(Int(machine.maxInclinePercent))%")
-                                .font(.subheadline)
-                            Slider(value: $machine.maxInclinePercent, in: 4...15, step: 1)
-                        }
-                    }
-                }
-            } else {
-                Section("Resistance") {
-                    Picker("Resistance levels on your bike", selection: $machine.maxResistance) {
-                        Text("8").tag(8)
-                        Text("10").tag(10)
-                        Text("16").tag(16)
-                        Text("20").tag(20)
-                        Text("24").tag(24)
-                        Text("32").tag(32)
-                        Text("100 (Peloton-style)").tag(100)
-                    }
-                }
-            }
+            MachineProfileForm(equipment: equipment, machine: $machine)
             Section {
                 Button {
                     settings.setMachine(machine, for: equipment)
@@ -253,20 +222,22 @@ struct SetupView: View {
                         .padding(14)
                         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
 
-                        Button {
-                            shuffleOffset += 1
-                            buildPlan()
-                        } label: {
-                            // Styling inside the label keeps the whole bar
-                            // tappable — outside a .plain button, only the
-                            // text itself would respond.
-                            Label("Mix it up", systemImage: "shuffle")
-                                .font(.subheadline.weight(.medium))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                        if canShuffle {
+                            Button {
+                                shuffleOffset += 1
+                                buildPlan()
+                            } label: {
+                                // Styling inside the label keeps the whole bar
+                                // tappable — outside a .plain button, only the
+                                // text itself would respond.
+                                Label("Mix it up", systemImage: "shuffle")
+                                    .font(.subheadline.weight(.medium))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
 
                         Button {
                             onStart(plan)
@@ -335,6 +306,7 @@ struct SetupView: View {
             bmi: settings.bmi,
             age: settings.value.age,
             preferLowImpact: settings.value.preferLowImpact)
+        canShuffle = WorkoutGenerator.candidateProtocols(input).count > 1
         plan = WorkoutGenerator.makePlan(input)
     }
 

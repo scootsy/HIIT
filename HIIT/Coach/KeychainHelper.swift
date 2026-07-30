@@ -8,7 +8,9 @@ enum KeychainHelper {
     private static let account = "anthropic"
 
     /// Returns false when the write failed, so the UI can say so instead of
-    /// showing "Saved ✓" for a key that never landed.
+    /// showing "Saved ✓" for a key that never landed. Updates in place rather
+    /// than delete-then-add: the old version destroyed the existing key first,
+    /// so a failed add left the user with no key at all.
     @discardableResult
     static func save(_ value: String) -> Bool {
         let query: [String: Any] = [
@@ -16,8 +18,14 @@ enum KeychainHelper {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
-        guard !value.isEmpty else { return true }
+        guard !value.isEmpty else {
+            SecItemDelete(query as CFDictionary)
+            return true
+        }
+        let payload: [String: Any] = [kSecValueData as String: Data(value.utf8)]
+        let updated = SecItemUpdate(query as CFDictionary, payload as CFDictionary)
+        if updated == errSecSuccess { return true }
+        guard updated == errSecItemNotFound else { return false }
         var attributes = query
         attributes[kSecValueData as String] = Data(value.utf8)
         // ThisDeviceOnly keeps the key out of device backups and migrations.

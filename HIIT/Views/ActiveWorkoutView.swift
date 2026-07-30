@@ -65,7 +65,13 @@ struct ActiveWorkoutContainerView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase != .active && engine.state != .ready {
+            // Only while the session is live. Once it finishes, the checkpoint
+            // written on the state change above is final — and once the user
+            // saves, SessionSaver clears the file; re-writing it here (state
+            // stays .finished on the summary screen) resurrected a phantom
+            // "Recover unsaved workout?" after every save-then-lock,
+            // duplicating the session and applying progression twice.
+            if newPhase != .active && (engine.state == .running || engine.state == .paused) {
                 WorkoutCheckpoint.save(engine.makeCheckpoint())
             }
         }
@@ -563,8 +569,10 @@ struct ActiveWorkoutView: View {
                     .overlay(Circle().stroke(.white.opacity(0.09), lineWidth: 1))
                     .foregroundStyle(.white.opacity(0.85))
             }
-            .opacity(engine.inOvertime ? 0.3 : 1)
-            .disabled(engine.inOvertime)
+            // The engine ignores skips while paused — dim the button too, so
+            // it doesn't read as a live control that does nothing.
+            .opacity(engine.inOvertime || engine.state == .paused ? 0.3 : 1)
+            .disabled(engine.inOvertime || engine.state == .paused)
         }
         .padding(.bottom, 4)
     }

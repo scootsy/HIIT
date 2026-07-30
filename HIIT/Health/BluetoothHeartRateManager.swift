@@ -1,6 +1,7 @@
 import Foundation
 import CoreBluetooth
 import Observation
+import os
 
 /// Direct BLE connection to any monitor speaking the standard Bluetooth Heart
 /// Rate profile (Amazfit broadcast mode, Polar/Garmin/Coospo straps, etc.).
@@ -23,6 +24,9 @@ final class BluetoothHeartRateManager: NSObject {
         case scanning
         case connecting(String)
         case connected(String)
+        /// A user-initiated pairing attempt timed out — surfaced in the
+        /// pairing sheet so "Connecting…" can't spin forever.
+        case failed(String)
     }
 
     struct DiscoveredMonitor: Identifiable, Equatable {
@@ -59,6 +63,9 @@ final class BluetoothHeartRateManager: NSObject {
     private var targetID: UUID? = nil
     private var savedName = ""
     private var shouldReconnect = false
+    /// Times out user-initiated pairing attempts. Saved-monitor reconnects
+    /// during a workout deliberately keep retrying forever instead.
+    private var connectTimeout: DispatchWorkItem? = nil
 
     private enum Intent {
         case none
@@ -82,6 +89,13 @@ final class BluetoothHeartRateManager: NSObject {
 
     /// Pairing: connect to a monitor the user tapped in the discovered list.
     func connect(to id: UUID, name: String) {
+        connectTimeout?.cancel()
+        // CoreBluetooth connect requests never time out on their own; a
+        // pending connect to a previously tapped monitor could complete
+        // later, leaving two straps streaming and the wrong one persisted.
+        if let previous = connectedPeripheral, previous.identifier != id {
+            central?.cancelPeripheralConnection(previous)
+        }
         targetID = id
         savedName = name
         shouldReconnect = true
@@ -91,6 +105,25 @@ final class BluetoothHeartRateManager: NSObject {
         peripheral.delegate = self
         status = .connecting(name)
         central?.connect(peripheral)
+        let timeout = DispatchWorkItem { [weak self] in
+            self?.connectAttemptTimedOut(id: id, name: name)
+        }
+        connectTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
+    }
+
+    private func connectAttemptTimedOut(id: UUID, name: String) {
+        guard targetID == id, !isConnected else { return }
+        AppLog.ble.error("pairing attempt to \(name, privacy: .public) timed out")
+        shouldReconnect = false
+        targetID = nil
+        if let peripheral = connectedPeripheral {
+            central?.cancelPeripheralConnection(peripheral)
+        }
+        connectedPeripheral = nil
+        status = .failed(name)
+        // Keep the nearby list fresh so the user can simply tap to retry.
+        central?.scanForPeripherals(withServices: [Self.heartRateService], options: nil)
     }
 
     /// Workout start: reconnect to the remembered monitor with no user action.
@@ -102,6 +135,7 @@ final class BluetoothHeartRateManager: NSObject {
     }
 
     func disconnect() {
+        connectTimeout?.cancel()
         shouldReconnect = false
         targetID = nil
         intent = .none
@@ -204,17 +238,32 @@ extension BluetoothHeartRateManager: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        // A stale connect (to a monitor the user has since navigated away
+        // from) can still complete — don't adopt a peripheral we no longer
+        // want.
+        guard peripheral.identifier == targetID else {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         peripheral.discoverServices([Self.heartRateService])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        if shouldReconnect, peripheral.identifier == targetID {
-            central.connect(peripheral)
+        AppLog.ble.error("connect failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
+        guard shouldReconnect, peripheral.identifier == targetID else { return }
+        // Brief pause before retrying so a monitor that rejects the attempt
+        // outright doesn't produce a hot connect loop.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.shouldReconnect, peripheral.identifier == self.targetID else { return }
+            self.central?.connect(peripheral)
         }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard peripheral.identifier == targetID else { return }
+        if let error {
+            AppLog.ble.error("monitor disconnected: \(error.localizedDescription, privacy: .public)")
+        }
         latestHR = nil
         latestHRDate = nil
         if shouldReconnect {
@@ -231,22 +280,24 @@ extension BluetoothHeartRateManager: CBCentralManagerDelegate {
 extension BluetoothHeartRateManager: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil else { return }
+        guard error == nil, peripheral.identifier == targetID else { return }
         for service in peripheral.services ?? [] where service.uuid == Self.heartRateService {
             peripheral.discoverCharacteristics([Self.heartRateMeasurement], for: service)
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard error == nil else { return }
+        guard error == nil, peripheral.identifier == targetID else { return }
         for characteristic in service.characteristics ?? [] where characteristic.uuid == Self.heartRateMeasurement {
             peripheral.setNotifyValue(true, for: characteristic)
+            connectTimeout?.cancel()
             status = .connected(peripheral.name ?? savedName)
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard error == nil,
+              peripheral.identifier == targetID,
               characteristic.uuid == Self.heartRateMeasurement,
               let data = characteristic.value else { return }
         let bytes = [UInt8](data)

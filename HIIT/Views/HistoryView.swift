@@ -15,7 +15,10 @@ struct HistoryView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if sessions.isEmpty {
+                // Health trends deserve showing even before the first saved
+                // workout — the full empty state only when there is truly
+                // nothing to display.
+                if sessions.isEmpty && vo2Series.isEmpty && restingSeries.isEmpty {
                     ContentUnavailableView(
                         "No workouts yet",
                         systemImage: "flame",
@@ -46,17 +49,24 @@ struct HistoryView: View {
                                 Text("Apple Health · last 6 months")
                             }
                         }
-                        Section("Minutes") {
-                            MinutesTrendChart(sessions: sessions)
-                                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
-                        }
-                        Section("Sessions") {
-                            ForEach(sessions) { session in
-                                NavigationLink(value: session) {
-                                    HistoryRow(session: session)
-                                }
+                        if sessions.isEmpty {
+                            Section("Sessions") {
+                                Text("Finished sessions land here.")
+                                    .foregroundStyle(.secondary)
                             }
-                            .onDelete(perform: delete)
+                        } else {
+                            Section("Minutes") {
+                                MinutesTrendChart(sessions: sessions)
+                                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+                            }
+                            Section("Sessions") {
+                                ForEach(sessions) { session in
+                                    NavigationLink(value: session) {
+                                        HistoryRow(session: session)
+                                    }
+                                }
+                                .onDelete(perform: delete)
+                            }
                         }
                     }
                 }
@@ -111,6 +121,16 @@ struct FitnessSignalRow: View {
     private var delta: Double { latest - (series.first?.value ?? latest) }
     private var improving: Bool { higherIsBetter ? delta >= 0 : delta <= 0 }
 
+    /// The span the delta actually covers — the query window is 6 months, but
+    /// two samples a week apart must not claim "over 6 months".
+    private var spanText: String {
+        guard let first = series.first?.date, let last = series.last?.date, last > first else { return "" }
+        let days = Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0
+        if days >= 60 { return "over \(days / 30) months" }
+        if days >= 14 { return "over \(days / 7) weeks" }
+        return "over \(max(1, days)) day\(days == 1 ? "" : "s")"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top) {
@@ -126,18 +146,27 @@ struct FitnessSignalRow: View {
                             .foregroundStyle(.secondary)
                     }
                     if abs(delta) >= 0.05 {
-                        Text(String(format: "%+.1f over 6 months", delta))
+                        Text(String(format: "%+.1f ", delta) + spanText)
                             .font(.caption)
                             .foregroundStyle(improving ? Theme.recover : Theme.steady)
                     }
                 }
                 Spacer()
                 Chart(series) { point in
-                    LineMark(
-                        x: .value("Date", point.date),
-                        y: .value("Value", point.value))
-                        .foregroundStyle(improving ? Theme.recover : Theme.steady)
-                        .interpolationMethod(.catmullRom)
+                    // A one-point LineMark draws nothing — show the sample as
+                    // a dot instead of a blank chart area.
+                    if series.count == 1 {
+                        PointMark(
+                            x: .value("Date", point.date),
+                            y: .value("Value", point.value))
+                            .foregroundStyle(improving ? Theme.recover : Theme.steady)
+                    } else {
+                        LineMark(
+                            x: .value("Date", point.date),
+                            y: .value("Value", point.value))
+                            .foregroundStyle(improving ? Theme.recover : Theme.steady)
+                            .interpolationMethod(.catmullRom)
+                    }
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
@@ -226,13 +255,28 @@ struct SessionDetailView: View {
     let session: WorkoutSession
 
     @Environment(SettingsStore.self) private var settings
+    @Environment(HealthKitManager.self) private var health
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @State private var showCoach = false
     @State private var coachSummary = ""
     @State private var confirmDelete = false
+    @State private var retryingHealth = false
+    @State private var healthRetryOutcome: HealthKitManager.WorkoutSaveOutcome? = nil
 
     var body: some View {
+        // The model can be deleted out from under this view — from the other
+        // tab's copy of the detail screen, or mid-pop after our own delete.
+        // Reading properties of a deleted @Model is undefined; show a
+        // placeholder instead.
+        if session.isDeleted {
+            ContentUnavailableView("Session deleted", systemImage: "trash")
+        } else {
+            detail
+        }
+    }
+
+    private var detail: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -271,6 +315,9 @@ struct SessionDetailView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+                if !session.savedToHealth {
+                    healthRetryRow
+                }
                 if !session.notes.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Notes").font(.headline)
@@ -278,30 +325,32 @@ struct SessionDetailView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Phases").font(.headline)
-                    ForEach(Array(session.records.enumerated()), id: \.offset) { _, record in
-                        HStack(spacing: 12) {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Theme.color(for: record.kindValue))
-                                .frame(width: 5, height: 30)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(record.label)
-                                    .font(.subheadline)
-                                Text(recordTarget(record))
+                if !session.records.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Phases").font(.headline)
+                        ForEach(Array(session.records.enumerated()), id: \.offset) { _, record in
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Theme.color(for: record.kindValue))
+                                    .frame(width: 5, height: 30)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(record.label)
+                                        .font(.subheadline)
+                                    Text(recordTarget(record))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text("\(clockString(record.actualSeconds)) / \(clockString(record.plannedSeconds))")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                                    .foregroundStyle(record.actualSeconds >= record.plannedSeconds * 0.9 ? .secondary : Color.orange)
                             }
-                            Spacer()
-                            Text("\(clockString(record.actualSeconds)) / \(clockString(record.plannedSeconds))")
-                                .font(.caption)
-                                .monospacedDigit()
-                                .foregroundStyle(record.actualSeconds >= record.plannedSeconds * 0.9 ? .secondary : Color.orange)
                         }
                     }
+                    .padding(14)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
                 }
-                .padding(14)
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
             }
             .padding()
         }
@@ -340,6 +389,50 @@ struct SessionDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// A failed (or never-authorized) Health export used to be recorded and
+    /// then forgotten — this is the one place it can be seen and retried.
+    /// The strap HR trace isn't persisted, so a retry saves the workout,
+    /// energy, and distance without it.
+    private var healthRetryRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "heart.slash")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Not saved to Apple Health")
+                    .font(.footnote)
+                if healthRetryOutcome == .failed {
+                    Text("Still couldn't save — check sharing under Health → Profile → Apps")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if healthRetryOutcome == .notAuthorized {
+                    Text("Health sharing is off for workouts")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if retryingHealth {
+                ProgressView()
+            } else {
+                Button("Save now") {
+                    retryingHealth = true
+                    Task { @MainActor in
+                        let ok = await health.saveWorkout(session: session)
+                        healthRetryOutcome = ok
+                        if ok == .saved {
+                            session.savedToHealth = true
+                            try? context.save()
+                        }
+                        retryingHealth = false
+                    }
+                }
+                .font(.footnote.weight(.medium))
+            }
+        }
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func recordTarget(_ record: PhaseRecord) -> String {

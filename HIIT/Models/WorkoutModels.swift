@@ -72,6 +72,11 @@ struct WorkoutPlan: Identifiable, Codable, Equatable {
     var vibe: SessionVibe
     var minutes: Int
     var cueLeadSeconds: Int
+    /// True when the generator quietly converted an auto session into a
+    /// recovery-week deload. Optional so checkpoints written before this
+    /// field existed still decode. SessionSaver keys the deload-counter
+    /// reset off this — never off the display name.
+    var isDeload: Bool? = nil
     var phases: [IntervalPhase]
 
     var totalSeconds: Double { phases.reduce(0) { $0 + $1.seconds } }

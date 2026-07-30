@@ -7,6 +7,13 @@ import Foundation
 /// available, vetoes increases after sessions that ran very hot.
 enum ProgressionEngine {
 
+    /// One progression level's worth of target change. The generator applies
+    /// these when building targets, and WorkoutEngine.buildResult inverts them
+    /// to convert mid-workout overrides back into level credit — the two sides
+    /// must stay in lockstep, so both read these shared constants.
+    static let speedPerLevelMph = 0.2
+    static let resistanceFractionPerLevel = 0.015
+
     struct Update {
         var newLevel: Double
         var note: String

@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import Observation
+import os
 
 /// All Apple Health integration: authorization, pulling a profile snapshot
 /// (age / weight / height / resting HR) to personalize workouts, streaming
@@ -66,7 +67,12 @@ final class HealthKitManager {
             return nil
         } catch {
             let message = (error as NSError).localizedDescription
-            if message.localizedCaseInsensitiveContains("entitlement") {
+            AppLog.health.error("authorization request failed: \(message, privacy: .public)")
+            // The entitlement identifier itself is never localized, so match
+            // it too — the bare word "entitlement" only appears in English
+            // error text.
+            if message.localizedCaseInsensitiveContains("entitlement")
+                || message.contains("com.apple.developer.healthkit") {
                 return "This copy of the app is missing the HealthKit capability, so iOS refused to show the permission sheet. Sideloading tools sometimes strip it when re-signing — reinstall via Xcode (most reliable), or use Sideloadly with the HealthKit entitlement kept."
             }
             return message
@@ -95,7 +101,10 @@ final class HealthKitManager {
         guard let type = quantityType(id) else { return nil }
         return await withCheckedContinuation { continuation in
             let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
-            let query = HKSampleQuery(sampleType: type, predicate: nil, limit: 1, sortDescriptors: [sort]) { _, samples, _ in
+            let query = HKSampleQuery(sampleType: type, predicate: nil, limit: 1, sortDescriptors: [sort]) { _, samples, error in
+                if let error {
+                    AppLog.health.error("read \(id.rawValue, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                }
                 let value = (samples?.first as? HKQuantitySample)?.quantity.doubleValue(for: unit)
                 continuation.resume(returning: value)
             }
@@ -117,7 +126,10 @@ final class HealthKitManager {
         let predicate = HKQuery.predicateForSamples(withStart: start, end: nil, options: [])
         return await withCheckedContinuation { continuation in
             let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: true)
-            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, _ in
+            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sort]) { _, samples, error in
+                if let error {
+                    AppLog.health.error("series read \(id.rawValue, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                }
                 let points = (samples ?? [])
                     .compactMap { $0 as? HKQuantitySample }
                     .map { SamplePoint(id: $0.endDate, value: $0.quantity.doubleValue(for: unit)) }
@@ -170,41 +182,79 @@ final class HealthKitManager {
     }
 
     func saveWorkout(result: SessionResult) async -> WorkoutSaveOutcome {
+        await saveWorkout(equipment: result.plan.equipment,
+                          start: result.startDate,
+                          end: result.endDate,
+                          kilocalories: result.estimatedCalories,
+                          distanceMeters: result.estimatedDistanceMeters,
+                          heartRateSamples: result.heartRateSamples)
+    }
+
+    /// Retry path for a stored session whose original export failed. The
+    /// strap heart-rate trace isn't persisted with the session, so a retried
+    /// export carries the workout, energy, and distance but no HR samples.
+    func saveWorkout(session: WorkoutSession) async -> WorkoutSaveOutcome {
+        await saveWorkout(equipment: session.equipment,
+                          start: session.date,
+                          end: session.date.addingTimeInterval(max(1, session.totalSeconds)),
+                          kilocalories: session.estimatedCalories,
+                          distanceMeters: session.estimatedDistanceMeters,
+                          heartRateSamples: [])
+    }
+
+    /// True when we may write this sample type. Health treats "not asked yet"
+    /// and "denied" separately from authorized; adding an unauthorized sample
+    /// makes the whole builder throw, which used to sink the entire workout
+    /// export because one toggle (e.g. Heart Rate) was off.
+    private func sharingAuthorized(_ id: HKQuantityTypeIdentifier) -> Bool {
+        guard let type = quantityType(id) else { return false }
+        return store.authorizationStatus(for: type) == .sharingAuthorized
+    }
+
+    private func saveWorkout(equipment: Equipment,
+                             start: Date,
+                             end: Date,
+                             kilocalories: Double,
+                             distanceMeters: Double,
+                             heartRateSamples: [HRSample]) async -> WorkoutSaveOutcome {
         guard Self.isAvailable else { return .notAuthorized }
         guard store.authorizationStatus(for: HKObjectType.workoutType()) == .sharingAuthorized else {
             return .notAuthorized
         }
         let configuration = HKWorkoutConfiguration()
-        switch result.plan.equipment {
+        switch equipment {
         case .bike:
             configuration.activityType = .cycling
         case .treadmill, .outdoor:
             configuration.activityType = .running
         }
-        configuration.locationType = result.plan.equipment == .outdoor ? .outdoor : .indoor
+        configuration.locationType = equipment == .outdoor ? .outdoor : .indoor
 
         let builder = HKWorkoutBuilder(healthStore: store, configuration: configuration, device: .local())
         do {
-            try await builder.beginCollection(at: result.startDate)
+            try await builder.beginCollection(at: start)
+            // Attach only the sample types the user actually shares — the
+            // workout itself must still save when individual toggles are off.
             var samples: [HKSample] = []
-            if result.estimatedCalories > 1, let type = quantityType(.activeEnergyBurned) {
+            if kilocalories > 1, sharingAuthorized(.activeEnergyBurned), let type = quantityType(.activeEnergyBurned) {
                 samples.append(HKQuantitySample(
                     type: type,
-                    quantity: HKQuantity(unit: .kilocalorie(), doubleValue: result.estimatedCalories),
-                    start: result.startDate,
-                    end: result.endDate))
+                    quantity: HKQuantity(unit: .kilocalorie(), doubleValue: kilocalories),
+                    start: start,
+                    end: end))
             }
-            if result.estimatedDistanceMeters > 10,
-               result.plan.equipment != .bike,
+            if distanceMeters > 10,
+               equipment != .bike,
+               sharingAuthorized(.distanceWalkingRunning),
                let type = quantityType(.distanceWalkingRunning) {
                 samples.append(HKQuantitySample(
                     type: type,
-                    quantity: HKQuantity(unit: .meter(), doubleValue: result.estimatedDistanceMeters),
-                    start: result.startDate,
-                    end: result.endDate))
+                    quantity: HKQuantity(unit: .meter(), doubleValue: distanceMeters),
+                    start: start,
+                    end: end))
             }
-            if !result.heartRateSamples.isEmpty, let type = quantityType(.heartRate) {
-                let hrSamples = result.heartRateSamples.map { sample in
+            if !heartRateSamples.isEmpty, sharingAuthorized(.heartRate), let type = quantityType(.heartRate) {
+                let hrSamples = heartRateSamples.map { sample in
                     HKQuantitySample(
                         type: type,
                         quantity: HKQuantity(unit: Self.bpmUnit, doubleValue: sample.bpm),
@@ -216,11 +266,12 @@ final class HealthKitManager {
             if !samples.isEmpty {
                 try await builder.addSamples(samples)
             }
-            try await builder.addMetadata([HKMetadataKeyIndoorWorkout: result.plan.equipment != .outdoor])
-            try await builder.endCollection(at: result.endDate)
+            try await builder.addMetadata([HKMetadataKeyIndoorWorkout: equipment != .outdoor])
+            try await builder.endCollection(at: end)
             _ = try await builder.finishWorkout()
             return .saved
         } catch {
+            AppLog.health.error("workout export failed: \((error as NSError).localizedDescription, privacy: .public)")
             return .failed
         }
     }

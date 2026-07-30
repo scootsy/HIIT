@@ -72,14 +72,15 @@ struct SettingsView: View {
                 } header: {
                     Text("AI Coach (optional)")
                 } footer: {
-                    Text("Key stays in the device Keychain, sent only to Anthropic. Coach requests include your profile numbers (age, weight, resting HR), recent session stats, and your workout notes. Get a key at console.anthropic.com.")
+                    Text("Key stays in the device Keychain, sent only to Anthropic. Coach requests include your profile numbers (age, weight, resting HR), experience level, recent session stats, and your workout notes. Get a key at console.anthropic.com.")
                 }
 
                 Section {
                     NavigationLink("The science behind your workouts") {
                         ScienceView()
                     }
-                    LabeledContent("Version", value: "1.0")
+                    LabeledContent("Version",
+                                   value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")
                 } header: {
                     Text("About")
                 } footer: {
@@ -139,7 +140,12 @@ struct SettingsView: View {
                     refreshing = true
                     Task {
                         let snapshot = await health.fetchProfile()
-                        settings.apply(snapshot)
+                        // An all-nil snapshot means revoked access or an empty
+                        // Health profile — say so instead of silently stopping
+                        // the spinner with a stale "last synced" date.
+                        if !settings.apply(snapshot) {
+                            healthError = "Nothing came back from Health. If you revoked access, re-allow it under Health → Profile → Apps → HIIT Coach — or keep editing your details here."
+                        }
                         refreshing = false
                     }
                 } label: {
@@ -225,44 +231,40 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func profileEditor(for field: ProfileField) -> some View {
+        // Initial values are clamped into each wheel's range (a Health-synced
+        // value can sit outside it, which leaves the Picker with no selected
+        // row at all); nothing is written until the sheet's Done commits.
         switch field {
         case .age:
             NumberPickerSheet(
                 title: "Age",
                 range: 14...90,
                 suffix: "years",
-                selection: Binding(
-                    get: { settings.value.age ?? 35 },
-                    set: { settings.value.age = $0 }))
+                initial: settings.value.age ?? 35,
+                onSave: { settings.value.age = $0 })
         case .weight:
-            // Getters clamp into the wheel's range: the kg and lb ranges
-            // don't convert to each other exactly, and an out-of-range value
-            // leaves the Picker with no selected row at all.
             if settings.value.useMetric {
                 NumberPickerSheet(
                     title: "Weight",
                     range: 35...200,
                     suffix: "kg",
-                    selection: Binding(
-                        get: { min(200, max(35, Int((settings.value.weightKg ?? 75).rounded()))) },
-                        set: { settings.value.weightKg = Double($0) }))
+                    initial: Int((settings.value.weightKg ?? 75).rounded()),
+                    onSave: { settings.value.weightKg = Double($0) })
             } else {
                 NumberPickerSheet(
                     title: "Weight",
                     range: 80...440,
                     suffix: "lb",
-                    selection: Binding(
-                        get: { min(440, max(80, Int(((settings.value.weightKg ?? 75) * 2.20462).rounded()))) },
-                        set: { settings.value.weightKg = Double($0) / 2.20462 }))
+                    initial: Int(((settings.value.weightKg ?? 75) * 2.20462).rounded()),
+                    onSave: { settings.value.weightKg = Double($0) / 2.20462 })
             }
         case .restingHR:
             NumberPickerSheet(
                 title: "Resting heart rate",
                 range: 35...100,
                 suffix: "bpm",
-                selection: Binding(
-                    get: { Int(settings.value.restingHR ?? 65) },
-                    set: { settings.value.restingHR = Double($0) }))
+                initial: Int(settings.value.restingHR ?? 65),
+                onSave: { settings.value.restingHR = Double($0) })
         case .maxHR:
             MaxHRSheet()
         }
@@ -273,12 +275,19 @@ struct SettingsView: View {
     }
 }
 
-/// A single wheel — the right control for set-once numbers.
+/// A single wheel — the right control for set-once numbers. The value is
+/// staged locally and written only when Done commits it: the old
+/// binding-backed version had to pre-commit its default the moment the sheet
+/// opened (a wheel never calls the setter for an unchanged selection), which
+/// silently persisted "age 35 / 75 kg / 65 bpm" even when the user swiped
+/// the sheet away.
 struct NumberPickerSheet: View {
     let title: String
     let range: ClosedRange<Int>
     let suffix: String
-    @Binding var selection: Int
+    let initial: Int
+    let onSave: (Int) -> Void
+    @State private var selection = 0
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -293,15 +302,14 @@ struct NumberPickerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        onSave(selection)
+                        dismiss()
+                    }
                 }
             }
             .onAppear {
-                // A wheel only calls the binding's setter when the selection
-                // *changes* — commit the presented value up front so opening
-                // the sheet and tapping Done actually saves what's shown.
-                let shown = selection
-                selection = shown
+                selection = min(range.upperBound, max(range.lowerBound, initial))
             }
         }
     }
@@ -372,42 +380,7 @@ struct MachineEditView: View {
 
     var body: some View {
         Form {
-            if equipment == .treadmill {
-                Section("Speed") {
-                    VStack(alignment: .leading) {
-                        Text("Top speed you'd ever use: \(settings.speedString(machine.maxSpeedMph))")
-                            .font(.subheadline)
-                        Slider(value: $machine.maxSpeedMph, in: 5...15, step: 0.5)
-                    }
-                    Picker("Speed buttons react", selection: $machine.cueLeadSeconds) {
-                        Text("Fast (5s warning)").tag(5)
-                        Text("Normal (10s warning)").tag(10)
-                        Text("Slow (15s warning)").tag(15)
-                    }
-                }
-                Section("Incline") {
-                    Toggle("Has incline", isOn: $machine.hasIncline)
-                    if machine.hasIncline {
-                        VStack(alignment: .leading) {
-                            Text("Max incline: \(Int(machine.maxInclinePercent))%")
-                                .font(.subheadline)
-                            Slider(value: $machine.maxInclinePercent, in: 4...15, step: 1)
-                        }
-                    }
-                }
-            } else {
-                Section("Resistance") {
-                    Picker("Resistance levels", selection: $machine.maxResistance) {
-                        Text("8").tag(8)
-                        Text("10").tag(10)
-                        Text("16").tag(16)
-                        Text("20").tag(20)
-                        Text("24").tag(24)
-                        Text("32").tag(32)
-                        Text("100 (Peloton-style)").tag(100)
-                    }
-                }
-            }
+            MachineProfileForm(equipment: equipment, machine: $machine)
         }
         .navigationTitle(equipment.label)
         .navigationBarTitleDisplayMode(.inline)

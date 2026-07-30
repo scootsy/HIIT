@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import os
 
 /// Persists a finished session and applies progression — the single save path
 /// shared by the post-workout summary and checkpoint recovery, so both apply
@@ -8,7 +9,9 @@ import SwiftData
 enum SessionSaver {
 
     struct Outcome {
-        let session: WorkoutSession
+        /// nil when the persist failed — nothing was recorded and the workout
+        /// checkpoint is still on disk for another attempt.
+        let session: WorkoutSession?
         let note: String
     }
 
@@ -48,7 +51,7 @@ enum SessionSaver {
         progress.level = update.newLevel
         progress.sessionsCompleted += 1
         progress.lastSessionDate = result.endDate
-        if result.plan.vibe == .easy || result.plan.name.contains("Recovery") {
+        if result.plan.vibe == .easy || result.plan.isDeload == true {
             progress.hardSessionsSinceEasy = 0
         } else {
             progress.hardSessionsSinceEasy += 1
@@ -56,11 +59,15 @@ enum SessionSaver {
 
         // Sustained performance moves the experience tier itself; rebasing
         // every equipment's level keeps targets continuous across the change.
+        // The settings write is deferred until the context saves: settings
+        // live in UserDefaults, which stays durable even when the SwiftData
+        // store doesn't.
         var note = update.note
+        var newExperience: ExperienceLevel? = nil
         if let change = ProgressionEngine.tierChange(experience: settings.experience,
                                                     progressLevel: progress.level,
                                                     declined: declined) {
-            settings.experience = change.newExperience
+            newExperience = change.newExperience
             let delta = progress.level >= ProgressionEngine.tierLevelSpan
                 ? -ProgressionEngine.tierLevelSpan
                 : ProgressionEngine.tierLevelSpan
@@ -73,7 +80,19 @@ enum SessionSaver {
         session.nextTimeNote = note
 
         context.insert(session)
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            // Roll back the progression mutations and the inserted session so
+            // a retry applies them exactly once, and keep the checkpoint on
+            // disk — it is now the only recoverable copy of this workout.
+            AppLog.save.error("session save failed: \(error.localizedDescription, privacy: .public)")
+            context.rollback()
+            return Outcome(session: nil, note: note)
+        }
+        if let newExperience {
+            settings.experience = newExperience
+        }
         WorkoutCheckpoint.clear()
         return Outcome(session: session, note: note)
     }

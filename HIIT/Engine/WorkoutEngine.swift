@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import UIKit
 import AudioToolbox
+import AVFoundation
 
 /// Live-session state machine: drives the phase timer, fires haptic/sound cues,
 /// aggregates heart-rate samples, supports mid-workout target overrides, and
@@ -32,6 +33,10 @@ final class WorkoutEngine {
     /// True after the plan's last phase finishes: the workout keeps running
     /// (timer counts up, heart rate keeps logging) until the user ends it.
     private(set) var inOvertime = false
+    /// Wall-clock seconds the plan spent suspended (screen locked, another app
+    /// foregrounded) and later credited by the catch-up walk — surfaced on the
+    /// summary so credited-but-unguided time is disclosed, not hidden.
+    private(set) var suspendedSeconds: Double = 0
 
     var soundOn = true
     var hapticsOn = true
@@ -53,6 +58,12 @@ final class WorkoutEngine {
     private var timer: Timer? = nil
     private var phaseStart = Date()
     private var pauseBegan: Date? = nil
+    /// When overtime began, so the "+0:00" clock counts from the moment the
+    /// plan actually ended — including after a manual skip of the final phase,
+    /// which used to leave the clock frozen until wall-time caught up to the
+    /// phase's full planned length. Shifted on resume like phaseStart.
+    private var overtimeStart: Date? = nil
+    private var lastSkipAt = Date.distantPast
     /// Read by the live kcal/distance estimate so skipped phases count correctly.
     private(set) var actualSeconds: [Double]
     private var lastBeepSecond = -1
@@ -62,8 +73,13 @@ final class WorkoutEngine {
     private var fallbackBeeps: Set<Int> = []
     /// True once this phase's GO/done tone is queued on the audio clock.
     private var endToneScheduled = false
-    /// How far ahead a tick may pre-schedule audio; just over one tick interval.
-    private let audioLookahead = 0.15
+    /// How far ahead a tick may pre-schedule audio. At least just over one
+    /// tick interval, widened to cover the output route's latency — otherwise
+    /// Bluetooth earbuds (150–300 ms) never leave TonePlayer enough lead to
+    /// schedule sample-accurately and every beep lands audibly late.
+    private var audioLookahead: Double {
+        max(0.15, AVAudioSession.sharedInstance().outputLatency + 0.05)
+    }
     private var hrSum = 0.0
     private var hrCount = 0.0
     private var workHRSum = 0.0
@@ -114,9 +130,7 @@ final class WorkoutEngine {
         return t
     }
 
-    var overtimeSeconds: Double {
-        inOvertime ? max(0, phaseElapsed - currentPhase.seconds) : 0
-    }
+    private(set) var overtimeSeconds: Double = 0
 
     /// "4 of 9" — work efforts fully behind you, visible during recoveries too.
     var workEffortsDone: Int {
@@ -250,13 +264,21 @@ final class WorkoutEngine {
 
     func resume() {
         guard state == .paused, let began = pauseBegan else { return }
-        phaseStart = phaseStart.addingTimeInterval(Date().timeIntervalSince(began))
+        let pauseLength = Date().timeIntervalSince(began)
+        phaseStart = phaseStart.addingTimeInterval(pauseLength)
+        if let start = overtimeStart {
+            overtimeStart = start.addingTimeInterval(pauseLength)
+        }
         pauseBegan = nil
         state = .running
     }
 
     func skip() {
         guard state == .running else { return }
+        // Two taps registered in quick succession must not discard two
+        // phases — the second would drop a whole work interval.
+        guard Date().timeIntervalSince(lastSkipAt) > 0.6 else { return }
+        lastSkipAt = Date()
         advance(auto: false, overshoot: 0)
     }
 
@@ -272,6 +294,9 @@ final class WorkoutEngine {
     private func tick() {
         guard state == .running else { return }
         phaseElapsed = Date().timeIntervalSince(phaseStart)
+        if inOvertime, let start = overtimeStart {
+            overtimeSeconds = max(0, Date().timeIntervalSince(start))
+        }
         let remaining = currentPhase.seconds - phaseElapsed
 
         if remaining > 0 && !inOvertime {
@@ -322,6 +347,7 @@ final class WorkoutEngine {
             } else {
                 // Plan complete — chime, but never end on the user's behalf.
                 inOvertime = true
+                overtimeStart = Date().addingTimeInterval(remaining)
                 cue(.finish)
             }
         }
@@ -339,7 +365,10 @@ final class WorkoutEngine {
         let endCue = phaseEndCue
         if phaseIndex + 1 >= plan.phases.count {
             // Manual skip on the final phase: straight to overtime, not out.
+            // Overtime counts from now — phaseStart stays put so the phase's
+            // real elapsed time keeps accruing into actualSeconds.
             inOvertime = true
+            overtimeStart = Date()
             cue(.finish)
             return
         }
@@ -361,6 +390,12 @@ final class WorkoutEngine {
         // fully-covered phase is credited at its planned duration and the
         // workout lands mid-phase exactly where the clock says it should.
         var carry = auto ? max(0, overshoot) : 0
+        // Anything past a couple of seconds means the timer stopped firing —
+        // the app was suspended. Track it so the summary can disclose how much
+        // of the credited time ran without cues or live guidance.
+        if auto && carry > 5 {
+            suspendedSeconds += carry
+        }
         var walkedPhases = false
         while carry >= currentPhase.seconds {
             actualSeconds[phaseIndex] = currentPhase.seconds
@@ -371,6 +406,7 @@ final class WorkoutEngine {
                 // The gap ran past the end of the plan — straight to overtime,
                 // with the leftover carry counted as overtime seconds.
                 inOvertime = true
+                overtimeStart = Date().addingTimeInterval(-carry)
                 phaseStart = Date().addingTimeInterval(-(currentPhase.seconds + carry))
                 phaseElapsed = currentPhase.seconds + carry
                 cue(.finish)
@@ -410,6 +446,10 @@ final class WorkoutEngine {
     // MARK: - Heart rate
 
     func recordHeartRate(_ bpm: Double, at date: Date, fromBLE: Bool = false) {
+        // The Health query replays samples up to 60s old when it starts — a
+        // pre-workout standing heart rate must not seed the session's
+        // average, max, or chart.
+        guard date >= startDate.addingTimeInterval(-5) else { return }
         latestHR = bpm
         latestHRDate = date
         guard state == .running else { return }
@@ -469,6 +509,12 @@ final class WorkoutEngine {
             case .recover, .cooldown:
                 if pct > 80 {
                     message = "Slow right down and let your heart rate fall"
+                }
+            case .steady:
+                // Steady blocks carry a zone band too (65–78%); nudge only on
+                // the hot side — "push harder" would be noise in a Zone-2 block.
+                if let hi = currentTarget.hrPercentHigh, pct > hi + 3 {
+                    message = "Ease off a touch — heart rate is above target"
                 }
             default:
                 break
@@ -595,8 +641,9 @@ final class WorkoutEngine {
         }
 
         // Express any manual override in "progression levels" so the next
-        // session starts where the user actually trained. The generator adds
-        // 0.2 mph (or 1.5% of max resistance) per level.
+        // session starts where the user actually trained, inverting the same
+        // per-level steps the generator applied (shared constants on
+        // ProgressionEngine so the two sides can't drift).
         var overrideSum = 0.0
         var overrideCount = 0.0
         for (i, phase) in plan.phases.enumerated() where phase.kind == .work && i < appliedTargets.count {
@@ -617,9 +664,9 @@ final class WorkoutEngine {
             // units, so divide by that step (floored well below one unit —
             // flooring at 1.0 silently swallowed overrides on every bike with
             // 32 levels or fewer). ProgressionEngine clamps the credit to ±2.
-            overrideLevels = overrideAvg / max(0.12, 0.015 * Double(machine.maxResistance))
+            overrideLevels = overrideAvg / max(0.12, ProgressionEngine.resistanceFractionPerLevel * Double(machine.maxResistance))
         } else {
-            overrideLevels = overrideAvg / 0.2
+            overrideLevels = overrideAvg / ProgressionEngine.speedPerLevelMph
         }
 
         return SessionResult(

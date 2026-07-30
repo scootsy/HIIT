@@ -12,6 +12,7 @@ struct SummaryView: View {
     @State private var rpe: Int? = nil
     @State private var notes = ""
     @State private var saved = false
+    @State private var saveFailed = false
     @State private var confirmDiscard = false
     @State private var healthSaved: HealthKitManager.WorkoutSaveOutcome? = nil
     @State private var nextNote = ""
@@ -47,6 +48,11 @@ struct SummaryView: View {
         }
         .sheet(isPresented: $showCoach) {
             CoachSheetView(summary: coachSummary)
+        }
+        .alert("Couldn't save this workout", isPresented: $saveFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Nothing was recorded — your phone may be low on storage. Try Save again; if it keeps failing, the workout will be offered for recovery on the next launch.")
         }
         .confirmationDialog("Discard this workout?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard workout", role: .destructive) {
@@ -96,6 +102,13 @@ struct SummaryView: View {
                 StatTile(title: "HR recovery",
                          value: "−\(Int(recovery)) bpm",
                          subtitle: "1-min drop after a hard effort")
+            }
+            if engine.suspendedSeconds > 30 {
+                Label("Includes \(clockString(engine.suspendedSeconds)) while the app was in the background — cues and live heart rate pause when the screen is off or another app is up front.",
+                      systemImage: "moon.zzz")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -187,19 +200,25 @@ struct SummaryView: View {
 
     private func save() {
         // A double-registered tap must not insert the session twice and
-        // advance progression twice.
+        // advance progression twice. (This runs synchronously on the main
+        // actor, so a second tap can't interleave before `saved` flips.)
         guard !saved else { return }
-        saved = true
 
         let r = result
         let outcome = SessionSaver.save(result: r, rpe: rpe, notes: notes,
                                         context: context, settings: settings)
+        guard let session = outcome.session else {
+            // Nothing was persisted and the checkpoint is still on disk —
+            // say so instead of flipping to the success state.
+            saveFailed = true
+            return
+        }
+        saved = true
         nextNote = outcome.note
 
         coachSummary = "The user just finished this session — give feedback with it in mind.\n"
-            + CoachService.buildSummary(sessions: [outcome.session], settings: settings)
+            + CoachService.buildSummary(sessions: [session], settings: settings)
 
-        let session = outcome.session
         Task { @MainActor in
             let ok = await health.saveWorkout(result: r)
             healthSaved = ok
@@ -234,8 +253,19 @@ struct CoachSheetView: View {
                             .font(.callout)
                             .textSelection(.enabled)
                     } else if let errorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 14) {
+                            Label(errorMessage, systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.secondary)
+                            // Several failure modes are transient (offline,
+                            // rate limit) — offer the retry the error text
+                            // promises instead of dismiss-and-reopen.
+                            Button("Try again") {
+                                loading = true
+                                self.errorMessage = nil
+                                Task { await load() }
+                            }
+                            .buttonStyle(.bordered)
+                        }
                     }
                 }
                 .padding()

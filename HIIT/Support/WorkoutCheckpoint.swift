@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Disk snapshot of an in-progress (or finished-but-unsaved) workout, written
 /// at every phase change and whenever the app leaves the foreground. If the
@@ -6,6 +7,10 @@ import Foundation
 /// the user taps Save, the next launch offers to recover the session instead
 /// of silently losing 10–60 minutes of training.
 struct WorkoutCheckpoint: Codable {
+    /// Format marker for the file on disk (nil in files written before it
+    /// existed). Bump when the stored shape changes incompatibly so load()
+    /// can tell "future format" apart from corruption.
+    var version: Int? = 1
     var plan: WorkoutPlan
     var startDate: Date
     var savedAt: Date
@@ -52,7 +57,17 @@ struct WorkoutCheckpoint: Codable {
 
     static func load() -> WorkoutCheckpoint? {
         guard let url = fileURL, let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(WorkoutCheckpoint.self, from: data)
+        guard let checkpoint = try? JSONDecoder().decode(WorkoutCheckpoint.self, from: data),
+              checkpoint.actualSeconds.count == checkpoint.plan.phases.count,
+              checkpoint.appliedTargets.count == checkpoint.plan.phases.count else {
+            // Unreadable or internally inconsistent — it can never succeed on
+            // a later launch either, so remove it instead of silently failing
+            // (and re-failing) forever.
+            AppLog.save.error("discarding unreadable or inconsistent workout checkpoint")
+            clear()
+            return nil
+        }
+        return checkpoint
     }
 
     static func clear() {
