@@ -14,6 +14,9 @@ struct GeneratorInput {
     var bmi: Double? = nil
     var age: Int? = nil
     var preferLowImpact: Bool = false
+    /// Advanced runners default to jog recoveries (5.0 mph); this swaps
+    /// them for a brisk walk (≤3.7 mph, optional incline) instead.
+    var preferWalkRecoveries: Bool = false
 }
 
 /// Builds a complete session from the user's equipment, experience, time budget
@@ -43,21 +46,50 @@ enum WorkoutGenerator {
         let kit = makeKit(input, protocolKind: requestedProtocol)
         let total = Double(max(8, input.minutes) * 60)
 
-        let warmupSecs: Double
+        // Warm-up floors follow the studied protocols (Bishop 2003: 5–10 min
+        // of active warm-up; Helgerud warmed up ~10 min before the 4×4):
+        // never below 3:00 — short sessions shrink the core, not the warm-up.
+        // Sprint protocols get 90 extra seconds spent on two fast pickups.
+        let sprintPrep = requestedProtocol == .tenTwentyThirty || requestedProtocol == .surges
+        var warmupSecs: Double
         if requestedProtocol == .norwegian {
-            warmupSecs = 300
+            warmupSecs = 480
         } else if input.minutes <= 12 {
-            warmupSecs = 120
-        } else if input.minutes <= 20 {
             warmupSecs = 180
-        } else {
+        } else if input.minutes <= 20 {
             warmupSecs = 240
+        } else {
+            warmupSecs = 300
         }
-        let cooldownMin: Double = input.minutes <= 12 ? 90 : 150
+        if sprintPrep { warmupSecs += 90 }
+        // Cool-downs depend on how the session ends: ≥3:00 after finishing
+        // on a hard effort, 4:00 after the 4×4 or sprint-heavy work (ACSM:
+        // light activity guards against post-exercise pooling). The very
+        // shortest sessions keep 1:30 — an 8-minute budget can't fund more.
+        // A Zone-2 steady finish keeps the original short cool-down below.
+        let cooldownMin: Double
+        if input.minutes <= 12 {
+            cooldownMin = 90
+        } else {
+            switch requestedProtocol {
+            case .norwegian, .tenTwentyThirty, .surges: cooldownMin = 240
+            default: cooldownMin = 180
+            }
+        }
 
         var phases: [IntervalPhase] = []
-        phases.append(IntervalPhase(kind: .warmup, seconds: (warmupSecs * 0.6).rounded(), label: "Warm up", cue: "Find your rhythm", target: kit.warm))
-        phases.append(IntervalPhase(kind: .warmup, seconds: (warmupSecs * 0.4).rounded(), label: "Warm up", cue: "Open up a little", target: kit.build))
+        let rampSecs = warmupSecs - (sprintPrep ? 90 : 0)
+        phases.append(IntervalPhase(kind: .warmup, seconds: (rampSecs * 0.6).rounded(), label: "Warm up", cue: "Find your rhythm", target: kit.warm))
+        phases.append(IntervalPhase(kind: .warmup, seconds: (rampSecs * 0.4).rounded(), label: "Warm up", cue: "Open up a little", target: kit.build))
+        if sprintPrep {
+            // Prime leg turnover before the first all-out effort: two 15s
+            // pickups near sprint pace, each shaken out with 30s easy.
+            let pickup = input.equipment == .bike ? kit.surgeWork : kit.sprint
+            phases.append(IntervalPhase(kind: .warmup, seconds: 15, label: "Pickup", cue: "Fast for a moment", target: pickup))
+            phases.append(IntervalPhase(kind: .warmup, seconds: 30, label: "Warm up", cue: "Shake it out", target: kit.warm))
+            phases.append(IntervalPhase(kind: .warmup, seconds: 15, label: "Pickup", cue: "Once more — fast", target: pickup))
+            phases.append(IntervalPhase(kind: .warmup, seconds: 30, label: "Warm up", cue: "Nearly there", target: kit.warm))
+        }
 
         let core = max(120, total - warmupSecs - cooldownMin)
         // A core builder can fall back to classic intervals when its own
@@ -68,12 +100,14 @@ enum WorkoutGenerator {
         let protocolKind = coreResult.kind
 
         // Spend any leftover time as an easy steady block, then cool down —
-        // extra Zone-2 minutes are far more useful than a padded cooldown.
+        // extra Zone-2 minutes are far more useful than a padded cooldown,
+        // and a steady finish only needs the short 2:30 wind-down.
         let used = corePhases.reduce(0) { $0 + $1.seconds }
         var remainder = total - warmupSecs - used
         if remainder >= cooldownMin + 150 {
-            corePhases.append(IntervalPhase(kind: .steady, seconds: (remainder - cooldownMin).rounded(), label: "Steady", cue: "Settle into a rhythm", target: kit.steady))
-            remainder = cooldownMin
+            let steadyCooldown = 150.0
+            corePhases.append(IntervalPhase(kind: .steady, seconds: (remainder - steadyCooldown).rounded(), label: "Steady", cue: "Settle into a rhythm", target: kit.steady))
+            remainder = steadyCooldown
         }
         phases.append(contentsOf: corePhases)
         phases.append(IntervalPhase(kind: .cooldown, seconds: max(60, remainder.rounded()), label: "Cool down", cue: "Bring it all the way down", target: kit.cool))
@@ -96,11 +130,12 @@ enum WorkoutGenerator {
             name = "Pyramid"
             focus = "Efforts climb, peak, then descend — teaches pacing and keeps the middle honest."
         case .norwegian:
-            // Name the session by the reps that actually fit: 4 rounds need
-            // ~33 minutes, so a 26–32 minute budget honestly gets a "3×4".
+            // Name the session by the reps that actually fit: with the full
+            // 8-minute warm-up, 4 rounds need ~37 minutes, so a 30–36 minute
+            // budget honestly gets a "3×4".
             let reps = corePhases.filter { $0.kind == .work }.count
             name = "Norwegian \(reps)×4"
-            focus = "Long 4-minute pushes at 85–95% of max heart rate — the classic VO₂max builder (Helgerud et al., 2007)."
+            focus = "Long 4-minute pushes at 90–95% of max heart rate — the classic VO₂max builder (Helgerud et al., 2007)."
         case .tenTwentyThirty:
             name = "10-20-30"
             focus = "30s easy, 20s moderate, 10s sprint — outsized fitness gains from tiny sprints (Gunnarsson & Bangsbo, 2012)."
@@ -136,34 +171,31 @@ enum WorkoutGenerator {
     // MARK: - Session-length suggestion
 
     /// The app picks the session length, not the user — this is a coaching
-    /// app for people who don't know how to build workouts. Anchored to
-    /// common prescription: ~2–3 vigorous sessions a week of 15–35 minutes
-    /// including warm-up and cool-down, shorter while starting out, with a
-    /// longer session rotated in periodically once a rhythm is established
-    /// (which also unlocks the 26+ minute Norwegian 4×4). Deload days are
-    /// deliberately shorter. The user can always override.
-    static func suggestMinutes(level: ExperienceLevel, sessionsCompleted: Int, hardSessionsSinceEasy: Int) -> Int {
-        var minutes: Int
+    /// app for people who don't know how to build workouts. Bases of
+    /// 15/25/30 minutes by tier grow +5 minutes per ~3 progression levels
+    /// (duration progresses before intensity, per ACSM), capped per tier;
+    /// every 4th session goes long (~+30%, the natural Norwegian 4×4 slot)
+    /// and deload days drop to ~65% of the working length. The user can
+    /// always override.
+    static func suggestMinutes(level: ExperienceLevel, progression: Double, sessionsCompleted: Int, hardSessionsSinceEasy: Int) -> Int {
+        let base: Int
+        let cap: Int
         switch level {
-        case .beginner: minutes = 15
-        case .intermediate: minutes = 20
-        case .advanced: minutes = 25
+        case .beginner: base = 15; cap = 20
+        case .intermediate: base = 25; cap = 30
+        case .advanced: base = 30; cap = 40
         }
-        // A few completed sessions earn a slightly longer default.
-        if sessionsCompleted >= 3 {
-            minutes += 5
-        }
-        // Every 4th session goes long — variety in duration is part of the
-        // programming, and it makes room for the 4×4 protocol.
-        if level != .beginner && sessionsCompleted >= 3 && sessionsCompleted % 4 == 3 {
-            minutes += 10
-        }
-        // The generator converts the next auto session into a deload —
-        // suggest a shorter one so "lighter" means lighter in time too.
+        var minutes = min(cap, base + 5 * max(0, Int(progression / 3)))
         if hardSessionsSinceEasy >= 5 {
-            minutes = min(minutes, 20)
+            // The generator converts the next auto session into a deload —
+            // "lighter" should mean lighter in time too.
+            minutes = max(12, Int((Double(minutes) * 0.65 / 5).rounded()) * 5)
+        } else if level != .beginner && sessionsCompleted >= 3 && sessionsCompleted % 4 == 3 {
+            // The long day: enough room for the 4×4's 8-minute warm-up,
+            // three-to-four 4-minute pushes, and a full cool-down.
+            minutes = min(45, max(30, Int((Double(minutes) * 1.3 / 5).rounded()) * 5))
         }
-        return min(minutes, 45)
+        return minutes
     }
 
     // MARK: - Protocol selection
@@ -182,17 +214,17 @@ enum WorkoutGenerator {
             }
             var options: [ProtocolKind] = [.classic, .pyramid]
             if input.machine.hasIncline { options.append(.hills) }
-            if input.minutes >= 26 { options.append(.norwegian) }
+            if input.minutes >= 30 { options.append(.norwegian) }
             return options
         case .bike:
             if input.level == .beginner { return [.classic] }
             var options: [ProtocolKind] = input.minutes >= 15 ? [.classic, .surges, .tenTwentyThirty, .pyramid] : [.classic, .surges]
-            if input.minutes >= 26 { options.append(.norwegian) }
+            if input.minutes >= 30 { options.append(.norwegian) }
             return options
         case .outdoor:
             if input.level == .beginner { return [.classic] }
             var options: [ProtocolKind] = input.minutes >= 15 ? [.classic, .pyramid, .tenTwentyThirty] : [.classic, .pyramid]
-            if input.minutes >= 26 { options.append(.norwegian) }
+            if input.minutes >= 30 { options.append(.norwegian) }
             return options
         }
     }
@@ -249,9 +281,23 @@ enum WorkoutGenerator {
         var hillWork: PhaseTarget
         var surgeWork: PhaseTarget
         var norwegianWork: PhaseTarget
+        /// Near-passive relief after all-out sprints (Dupont 2004: an easy
+        /// jog between short sprints steals the oxygen the muscles need to
+        /// recharge — time-to-exhaustion more than halves).
+        var sprintRest: PhaseTarget
+        /// The 4×4's prescribed ~70% HRmax recovery jog — a plain walk drops
+        /// most users well below it and shrinks time-in-zone in the next rep.
+        var norwegianRest: PhaseTarget
     }
 
     private static func treadmillSpeeds(_ input: GeneratorInput) -> Speeds {
+        // Recovery speeds are gait-explicit: beginners and intermediates
+        // walk (2.8 / 3.4 mph), advanced users jog (5.0 mph). Humans switch
+        // gait at ~4.3–4.9 mph (Hreljac 1993), so nothing between 4.2 and
+        // 4.7 is ever prescribed flat — it's a fast, awkward walk for some
+        // and a too-slow jog for others, which defeats a recovery interval.
+        // Recovery speed does NOT scale with progression: recoveries exist
+        // to enable the next effort, not as a progressively loaded stimulus.
         var easy: Double
         var work: Double
         switch input.level {
@@ -260,12 +306,12 @@ enum WorkoutGenerator {
         case .intermediate:
             easy = 3.4; work = 6.0
         case .advanced:
-            easy = 4.2; work = 7.5
+            easy = 5.0; work = 7.5
         }
         // Fitness proxies pulled from Apple Health: a high resting HR, high BMI,
         // or older age all argue for a gentler starting point.
         if let resting = input.restingHR, resting > 72 { work -= 0.4 }
-        if let bmi = input.bmi, bmi >= 30 { work -= 0.5; easy -= 0.3 }
+        if let bmi = input.bmi, bmi >= 30 { work -= 0.5; easy = min(easy, 3.4) }
         if let age = input.age, age >= 55 { work -= 0.4 }
         switch input.vibe {
         case .easy: work -= 0.6
@@ -274,7 +320,13 @@ enum WorkoutGenerator {
         }
         // Progressive overload: each level step is worth +0.2 mph on the work speed.
         work += ProgressionEngine.speedPerLevelMph * input.progression
-        easy += 0.05 * input.progression
+
+        // Walking recoveries on request (and always in low-impact mode):
+        // capped below the gait-transition zone.
+        let lowImpact = input.preferLowImpact && input.equipment == .treadmill && input.machine.hasIncline
+        if lowImpact || input.preferWalkRecoveries {
+            easy = min(easy, 3.7)
+        }
 
         easy = max(1.5, min(easy, input.machine.maxSpeedMph - 1))
         work = max(easy + 0.8, min(work, input.machine.maxSpeedMph))
@@ -288,7 +340,6 @@ enum WorkoutGenerator {
         // applies to every work-intensity target — sprints included — or the
         // hardest phases would put a user who opted out of running right
         // back into a 6 mph sprint at 6% incline.
-        let lowImpact = input.preferLowImpact && input.equipment == .treadmill && input.machine.hasIncline
         if lowImpact {
             work = min(work, 4.2)
             workIncline = min(max(6, 5 + 0.5 * input.progression), input.machine.maxInclinePercent)
@@ -296,12 +347,18 @@ enum WorkoutGenerator {
 
         var sprint = min(work + 1.8, input.machine.maxSpeedMph)
         if lowImpact { sprint = min(sprint, 4.2) }
-        let warm = max(1.5, easy - 0.4)
+        // Warm-ups stay walk-based even when recoveries are jogged — the
+        // building segment and pickups are where the jog arrives.
+        let warm = max(1.5, min(easy - 0.4, 3.8))
         return Speeds(warm: round1(warm), easy: round1(easy), work: round1(work), sprint: round1(sprint), workIncline: workIncline, easyIncline: easyIncline)
     }
 
     private static func bikeEfforts(_ input: GeneratorInput) -> BikeEfforts {
         let maxR = max(4, input.machine.maxResistance)
+        // Resistance fractions are a first-session starting guess only —
+        // "% of max resistance" means something different on every bike, so
+        // the real calibration loop is the user's mid-workout ± overrides,
+        // which feed straight into the next session's targets.
         var workFrac: Double
         switch input.level {
         case .beginner: workFrac = 0.55
@@ -319,6 +376,15 @@ enum WorkoutGenerator {
         let easyFrac = 0.35
         let sprintFrac = min(0.95, workFrac + 0.12)
 
+        // Sprint cadence scales with experience — holding form at 105+ rpm
+        // is a coordination skill novices don't have yet.
+        let sprintCadence: Int
+        switch input.level {
+        case .beginner: sprintCadence = 95
+        case .intermediate: sprintCadence = 100
+        case .advanced: sprintCadence = 110
+        }
+
         func res(_ fraction: Double) -> Int {
             max(1, min(maxR, Int((fraction * Double(maxR)).rounded())))
         }
@@ -328,7 +394,7 @@ enum WorkoutGenerator {
             sprintRes: res(sprintFrac),
             easyCadence: 75,
             workCadence: 90,
-            sprintCadence: 105,
+            sprintCadence: sprintCadence,
             maxResistance: maxR)
     }
 
@@ -360,18 +426,31 @@ enum WorkoutGenerator {
             let lowImpact = input.preferLowImpact && input.equipment == .treadmill && input.machine.hasIncline
             var norwegianSpeed = round1(max(s.easy + 0.8, s.work - 0.6))
             if lowImpact { norwegianSpeed = min(norwegianSpeed, 4.2) }
+            // 4×4 recovery targets ~70% HRmax (Helgerud's prescription): a
+            // jog for jog-recovery users, otherwise a bumped-up pace — and
+            // when recoveries must stay walks, a brisk incline walk instead.
+            let walkBased = s.easy < 4.8
+            var norwegianRestSpeed = walkBased ? max(s.easy + 0.8, round1(norwegianSpeed * 0.6)) : s.easy
+            var norwegianRestIncline = 0.0
+            if lowImpact || input.preferWalkRecoveries {
+                norwegianRestSpeed = min(norwegianRestSpeed, 3.7)
+                norwegianRestIncline = input.machine.hasIncline ? min(3, input.machine.maxInclinePercent) : 0
+            }
+            let norwegianRestWords = norwegianRestSpeed >= 4.2 ? "Easy jog" : "Brisk walk"
             return TargetKit(
                 warm: treadTarget(speed: s.warm, incline: s.easyIncline, rpe: 2, words: "Very comfortable", hr: hrBand(for: .warmup, level: input.level)),
                 build: treadTarget(speed: round1((s.warm + s.work) / 2), incline: s.easyIncline, rpe: 4, words: "Getting warmer", hr: hrBand(for: .warmup, level: input.level)),
-                easy: treadTarget(speed: s.easy, incline: s.easyIncline, rpe: 3, words: "Catch your breath", hr: hrBand(for: .recover, level: input.level)),
+                easy: treadTarget(speed: s.easy, incline: s.easyIncline, rpe: 3, words: s.easy >= 4.8 ? "Recovery jog" : "Catch your breath", hr: hrBand(for: .recover, level: input.level)),
                 work: treadTarget(speed: s.work, incline: s.workIncline, rpe: 8, words: "Hard — a few words at most", hr: workBand),
                 sprint: treadTarget(speed: s.sprint, incline: s.workIncline, rpe: 9, words: "Near max", hr: workBand),
                 moderate: treadTarget(speed: round1((s.easy + s.work) / 2), incline: s.easyIncline, rpe: 5, words: "Comfortably brisk", hr: (70, 82)),
                 steady: treadTarget(speed: round1((s.easy + s.work) / 2 - 0.3), incline: s.easyIncline, rpe: 4, words: "Conversational", hr: hrBand(for: .steady, level: input.level)),
-                cool: treadTarget(speed: max(1.5, round1(s.warm - 0.3)), incline: 0, rpe: 2, words: "Wind it down", hr: hrBand(for: .cooldown, level: input.level)),
+                cool: treadTarget(speed: max(1.5, round1(min(s.warm, 3.8) - 0.3)), incline: 0, rpe: 2, words: "Wind it down", hr: hrBand(for: .cooldown, level: input.level)),
                 hillWork: treadTarget(speed: round1(min(s.work * 0.72, 4.5)), incline: min(max(6, 5 + 0.5 * input.progression), max(1, input.machine.maxInclinePercent)), rpe: 8, words: "Strong climb", hr: workBand),
                 surgeWork: treadTarget(speed: s.sprint, incline: s.workIncline, rpe: 9, words: "Fast", hr: workBand),
-                norwegianWork: treadTarget(speed: norwegianSpeed, incline: s.workIncline, rpe: 7, words: "Hard but sustainable", hr: (85, 95)))
+                norwegianWork: treadTarget(speed: norwegianSpeed, incline: s.workIncline, rpe: 7, words: "Hard but sustainable", hr: (90, 95)),
+                sprintRest: treadTarget(speed: 2.2, incline: 0, rpe: 2, words: "Slow walk", hr: (nil, 70)),
+                norwegianRest: treadTarget(speed: round1(norwegianRestSpeed), incline: norwegianRestIncline, rpe: 3, words: norwegianRestWords, hr: (65, 75)))
         case .bike:
             let b = bikeEfforts(input)
             let workBand = hrBand(for: .work, level: input.level)
@@ -385,8 +464,10 @@ enum WorkoutGenerator {
                 steady: bikeTarget(resistance: max(1, (b.easyRes + b.workRes) / 2), cadence: 80, rpe: 4, words: "Conversational", hr: hrBand(for: .steady, level: input.level)),
                 cool: bikeTarget(resistance: max(1, b.easyRes - 1), cadence: 65, rpe: 2, words: "Wind it down", hr: hrBand(for: .cooldown, level: input.level)),
                 hillWork: bikeTarget(resistance: min(b.maxResistance, b.workRes + 2), cadence: 70, rpe: 8, words: "Grind it out", hr: workBand),
-                surgeWork: bikeTarget(resistance: b.workRes, cadence: 105, rpe: 8, words: "Fast legs!", hr: workBand),
-                norwegianWork: bikeTarget(resistance: max(1, b.workRes - 1), cadence: 85, rpe: 7, words: "Hard but sustainable", hr: (85, 95)))
+                surgeWork: bikeTarget(resistance: b.workRes, cadence: b.sprintCadence, rpe: 8, words: "Fast legs!", hr: workBand),
+                norwegianWork: bikeTarget(resistance: max(1, b.workRes - 1), cadence: 85, rpe: 7, words: "Hard but sustainable", hr: (90, 95)),
+                sprintRest: bikeTarget(resistance: max(1, b.easyRes - 1), cadence: 60, rpe: 2, words: "Very light spin", hr: (nil, 70)),
+                norwegianRest: bikeTarget(resistance: b.easyRes, cadence: 75, rpe: 3, words: "Steady recovery spin", hr: (65, 75)))
         }
     }
 
@@ -443,12 +524,19 @@ enum WorkoutGenerator {
         var n = Int(((core + rec) / cycle).rounded(.down))
         n = max(3, min(n, cap))
 
-        let target = (input.minutes <= 12 && input.level == .advanced) ? kit.sprint : kit.work
+        // The short advanced session is all-out sprints — its relief is a
+        // near-passive slow walk (kit.sprintRest), not the usual active
+        // recovery: an easy jog between sprints starves the muscles' energy
+        // resynthesis and halves how much sprinting a session can hold.
+        let sprintVariant = input.minutes <= 12 && input.level == .advanced
+        let target = sprintVariant ? kit.sprint : kit.work
+        let rest = sprintVariant ? kit.sprintRest : kit.easy
+        let restCue = sprintVariant ? "Slow right down — walk it" : "Ease right off — talking pace"
         var phases: [IntervalPhase] = []
         for i in 1...n {
             phases.append(IntervalPhase(kind: .work, seconds: work, label: "Interval", cue: "Push!", target: target))
             if i < n {
-                phases.append(IntervalPhase(kind: .recover, seconds: rec, label: "Recover", cue: "Ease right off", target: kit.easy))
+                phases.append(IntervalPhase(kind: .recover, seconds: rec, label: "Recover", cue: restCue, target: rest))
             }
         }
         return phases
@@ -499,7 +587,7 @@ enum WorkoutGenerator {
         for i in 1...reps {
             phases.append(IntervalPhase(kind: .work, seconds: workSecs, label: "Push", cue: "Hard but steady — settle in", target: kit.norwegianWork))
             if i < reps {
-                phases.append(IntervalPhase(kind: .recover, seconds: recSecs, label: "Recover", cue: "Active recovery — keep moving", target: kit.easy))
+                phases.append(IntervalPhase(kind: .recover, seconds: recSecs, label: "Recover", cue: "Active recovery — stay around 70%", target: kit.norwegianRest))
             }
         }
         return (phases, .norwegian)

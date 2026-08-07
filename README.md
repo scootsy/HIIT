@@ -10,7 +10,7 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 
 **Tell it who you are.** Connect Apple Health and it pulls your age, weight, height, and resting heart rate to set heart-rate zones (Tanaka formula), calibrate starting intensity, and improve calorie estimates. Or enter things manually — everything degrades gracefully.
 
-**It builds the session.** Pick a duration (8–60 min) and a feel ("Coach's pick", "Push me", "Easier today") and the generator assembles a warm-up, a research-based interval protocol, and a cool-down that exactly fills your time budget:
+**It builds the session — length included.** Pick where you're training and the app proposes your next workout whole: it chooses the duration from your level, history, and recovery state, then assembles a warm-up, a research-based interval protocol, and a cool-down that exactly fills it. Everything is overridable — duration chips (8–60 min via the stepper) and a feel picker ("Coach's pick", "Push me", "Easier today") regenerate the plan in place:
 
 | Protocol | Source | When you'll see it |
 |---|---|---|
@@ -23,13 +23,17 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 
 **Keep it on screen while you train.** The app keeps the display awake for the whole session, so this happens naturally — but if you press the power button or switch apps mid-workout, audio cues and live heart rate pause until you come back (the timer reconciles the gap from the wall clock, and the summary notes any time that ran unguided).
 
+**It follows you to the lock screen.** A Live Activity mirrors the workout in the Dynamic Island and on the lock screen: the current phase, a countdown that keeps ticking while the app is backgrounded, the target you should be holding, what's coming next, and **+/− buttons** that adjust the live targets without unlocking the phone.
+
 **It guides you through it.** A full-screen, phase-colored timer with a big countdown ring, the exact speed/incline or resistance/cadence to hit, and — the detail that matters on a treadmill — an **amber early warning before every step up**, sized to your machine's lag, so you can press the buttons before the interval starts. Cues are synthesized tones played through the media channel (they work with the ringer switch off and mix over your music): low beeps count the warning down (lead, 10, 6, 3, 2, 1), then a high **GO** when the harder phase lands. Slow-downs get no warning — braking early just cuts the effort short — instead each work interval counts itself out with the same beeps and a distinct done tone, so you push through to the line. If live heart rate is available (Apple Watch workout or a chest strap), it nudges you in real time when you're above or below the target zone. Feeling better than the plan? Tap **±** on the live target ("it said 5.0 but I'm running 5.5") — the change applies to the rest of the session, the calorie/distance math follows what you actually did, and the next session starts where you actually trained.
 
 **It learns.** After each session you rate the effort (RPE 1–10). Finish everything comfortably and next session's targets step up; a maximal or unfinished session holds or steps back; heart-rate data can veto increases after sessions that ran too hot. Every ~6th hard session is deliberately lighter — a recovery week you don't have to remember to schedule.
 
+**It grades the session.** With live heart rate, the summary answers "did this workout do its job?" in plain language: time at ≥85% of max HR (the high-intensity dose HIIT is programmed for), the share of work time spent in the target zone, how far your heart rate fell between efforts, and your 1-minute recovery after the last one — each marked met, partial, or missed, with what to change next time.
+
 **It remembers.** History with per-phase breakdowns, a weekly-minutes trend chart, and automatic export of every workout (duration, estimated calories, distance) to Apple Health. It also tracks the fitness signals a coach would actually watch: **Cardio Fitness (VO₂max)** and **resting heart rate** trends pulled from Health, plus **1-minute heart-rate recovery** measured automatically after your last hard interval whenever live HR is available.
 
-**Optional AI coach.** Add your own Anthropic API key in Settings and get short, concrete feedback on your recent training after any workout. The key is stored in the device Keychain and requests go directly from your phone to Anthropic — no middleman. Each request contains your profile numbers (age, weight, resting HR), your experience level, recent session stats, and any workout notes you wrote — nothing else leaves the device, and only when you tap the coach button.
+**Optional AI coach.** Add your own API key — Anthropic (Claude), OpenAI, or Google (Gemini) — in Settings and get short, concrete feedback on your recent training after any workout. Keys are stored in the device Keychain and requests go directly from your phone to the provider you chose — no middleman. Each request contains your profile numbers (age, weight, resting HR), your experience level, recent session stats, and any workout notes you wrote — nothing else leaves the device, and only when you tap the coach button.
 
 ## Requirements
 
@@ -70,12 +74,16 @@ HIIT/
 ├── Engine/
 │   ├── WorkoutGenerator.swift Protocol selection + target math (the brain)
 │   ├── WorkoutEngine.swift    Live timer state machine, cues, HR aggregation
+│   ├── SessionObjectives.swift Post-session HR-based objective grading
 │   ├── ProgressionEngine.swift Progressive-overload rules
 │   └── MetabolicMath.swift    ACSM MET equations, calories, HR zones
 ├── Health/                    HealthKit auth, profile pull, live HR, workout export
-├── Coach/                     Optional Anthropic API client + Keychain storage
+├── Coach/                     Optional AI-coach client (Claude/OpenAI/Gemini) + Keychain
+├── Support/                   Theme, tones, checkpointing, Live Activity controller
 └── Views/                     Home, guided setup, live workout, summary,
                                history + charts, settings, science explainer
+Shared/                        Live Activity attributes + intents (app + widget)
+HIITWidgets/                   Widget extension: lock screen + Dynamic Island UI
 ```
 
 ## Disclaimers

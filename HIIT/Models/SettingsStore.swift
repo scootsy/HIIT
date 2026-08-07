@@ -10,6 +10,7 @@ struct AppSettings: Codable {
     var maxHROverride: Double? = nil
     var experienceRaw: String = ExperienceLevel.beginner.rawValue
     var preferLowImpact: Bool = false
+    var preferWalkRecoveries: Bool = false
     var soundOn: Bool = true
     var hapticsOn: Bool = true
     var machines: [String: MachineProfile] = [:]
@@ -20,6 +21,11 @@ struct AppSettings: Codable {
     var hrMonitorName: String? = nil
     var experienceSetOnce: Bool? = nil
     var coachProviderRaw: String = CoachProvider.anthropic.rawValue
+    /// Rolling 7-day progression-cap anchors, keyed by equipment raw value:
+    /// when the current window started and the level it started from.
+    /// Kept in settings (UserDefaults) so no SwiftData schema change.
+    var progressWeekAnchorDates: [String: Date] = [:]
+    var progressWeekAnchorLevels: [String: Double] = [:]
 
     init() {}
 
@@ -36,6 +42,7 @@ struct AppSettings: Codable {
         maxHROverride = try? c.decodeIfPresent(Double.self, forKey: .maxHROverride)
         experienceRaw = (try? c.decodeIfPresent(String.self, forKey: .experienceRaw)) ?? ExperienceLevel.beginner.rawValue
         preferLowImpact = (try? c.decodeIfPresent(Bool.self, forKey: .preferLowImpact)) ?? false
+        preferWalkRecoveries = (try? c.decodeIfPresent(Bool.self, forKey: .preferWalkRecoveries)) ?? false
         soundOn = (try? c.decodeIfPresent(Bool.self, forKey: .soundOn)) ?? true
         hapticsOn = (try? c.decodeIfPresent(Bool.self, forKey: .hapticsOn)) ?? true
         machines = (try? c.decodeIfPresent([String: MachineProfile].self, forKey: .machines)) ?? [:]
@@ -46,6 +53,8 @@ struct AppSettings: Codable {
         hrMonitorName = try? c.decodeIfPresent(String.self, forKey: .hrMonitorName)
         experienceSetOnce = try? c.decodeIfPresent(Bool.self, forKey: .experienceSetOnce)
         coachProviderRaw = (try? c.decodeIfPresent(String.self, forKey: .coachProviderRaw)) ?? CoachProvider.anthropic.rawValue
+        progressWeekAnchorDates = (try? c.decodeIfPresent([String: Date].self, forKey: .progressWeekAnchorDates)) ?? [:]
+        progressWeekAnchorLevels = (try? c.decodeIfPresent([String: Double].self, forKey: .progressWeekAnchorLevels)) ?? [:]
     }
 }
 

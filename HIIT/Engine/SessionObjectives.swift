@@ -3,19 +3,22 @@ import Foundation
 /// Turns a finished session's live heart-rate data into a plain-language
 /// answer to "did this workout do what HIIT is supposed to do?".
 ///
-/// The graded objectives, with thresholds kept here so they're easy to tune:
-/// - **High-intensity dose** — total time at ≥85% of max HR. Accumulating
-///   minutes in this zone is the canonical stimulus HIIT is programmed for
-///   (Helgerud-style protocols prescribe 4-minute pushes at 85–95%).
-/// - **Work-interval intensity** — share of measured work time at or above
-///   the session's target-band floor. Graded only when intervals are long
-///   enough (≥45s) for heart rate to actually respond within them.
-/// - **Between-interval recovery** — average HR drop achieved during
-///   recovery phases. Too small a drop means the recoveries are too short
-///   or the recovery pace is too hot to recover at.
+/// The grading rules follow how training studies define compliant execution:
+/// - **High-intensity dose** — time at/above the session's work-band floor
+///   (~7–10 minutes is the per-session target in longer sessions; 60% of
+///   the prescribed work time in shorter ones). This, not average HR, is
+///   the accepted per-session effectiveness criterion.
+/// - **Interval attainment** — an interval ≥60s counts as achieved when HR
+///   *enters* the band at any point before it ends; heart rate lags effort
+///   by 20–50s, so grading averages would fail every honest ramp. Bouts
+///   under 60s are never graded individually — a maximal 20s sprint can
+///   end before HR reacts at all.
+/// - **Long-recovery quality** — only recoveries ≥120s (the 4×4's) are
+///   graded, against reaching ≤75% of max HR; shorter recoveries cannot
+///   physiologically show a drop, so they are left alone.
 /// - **1-minute heart-rate recovery** — the drop after the final hard
-///   effort; an established fitness marker (<12 bpm is the clinical flag,
-///   ≥25 tracks with good aerobic fitness).
+///   effort; <12 bpm is the validated clinical flag (Cole 1999), ≥25
+///   tracks with good aerobic fitness.
 enum SessionObjectives {
 
     enum Verdict {
@@ -36,66 +39,76 @@ enum SessionObjectives {
 
         let easyDay = engine.plan.vibe == .easy || engine.plan.isDeload == true
         let workPhases = engine.plan.phases.filter { $0.kind == .work }
-        let typicalWork = workPhases.isEmpty ? 0 :
-            workPhases.reduce(0) { $0 + $1.seconds } / Double(workPhases.count)
+        let prescribedWork = workPhases.reduce(0) { $0 + $1.seconds }
+        let floor = Int(engine.dosePctFloor)
 
         // 1. High-intensity dose
-        let dose = engine.sessionSecondsAt85
-        if dose > 0 || engine.workHRSeconds >= 60 {
-            let doseText = clockString(dose)
+        if engine.workHRSeconds >= 60 || engine.sessionSecondsAtFloor > 0 {
+            let dose = engine.sessionSecondsAtFloor
+            let doseText = "\(clockString(dose)) at ≥\(floor)% of max heart rate"
             if easyDay {
                 lines.append(Line(verdict: nil,
-                                  title: "\(doseText) at ≥85% of max heart rate",
+                                  title: doseText,
                                   detail: "An easy day on purpose — no intensity target today."))
-            } else if engine.plan.level == .beginner {
-                lines.append(Line(verdict: nil,
-                                  title: "\(doseText) at ≥85% of max heart rate",
-                                  detail: "At your level the target zone starts lower — this number will grow as you progress."))
-            } else {
-                let verdict: Verdict = dose >= 240 ? .met : (dose >= 90 ? .partial : .missed)
+            } else if prescribedWork > 0 {
+                // ~7–10 min in zone is the target for full-size sessions;
+                // shorter sessions are graded pro-rata at 60% of prescribed
+                // work (the 4×4 expects most of its work time in zone).
+                let norwegianLike = (workPhases.first?.target.hrPercentLow ?? 0) >= 90
+                let threshold = norwegianLike
+                    ? min(600, 0.75 * prescribedWork)
+                    : (prescribedWork >= 600 ? 420 : 0.6 * prescribedWork)
+                let verdict: Verdict = dose >= threshold ? .met : (dose >= threshold / 2 ? .partial : .missed)
                 let detail: String
                 switch verdict {
-                case .met: detail = "That's a solid dose of the high-intensity stimulus HIIT is built around."
-                case .partial: detail = "Some time in the zone — pushing the efforts slightly harder would earn more."
-                case .missed: detail = "Heart rate stayed below the high-intensity zone — the efforts may be set too easy."
+                case .met: detail = "A full dose of the high-intensity stimulus this session was built for."
+                case .partial: detail = "Some time in the zone — arriving at each effort's target a little sooner would earn more."
+                case .missed: detail = "Heart rate stayed under the zone — the targets may be set too easy for you now."
                 }
-                lines.append(Line(verdict: verdict,
-                                  title: "\(doseText) at ≥85% of max heart rate",
-                                  detail: detail))
+                lines.append(Line(verdict: verdict, title: doseText, detail: detail))
             }
         }
 
-        // 2. Work-interval intensity (long intervals only — short sprints
-        // end before heart rate can catch up, so a per-interval grade
-        // would punish exactly the sessions that went hardest)
-        if !easyDay, typicalWork >= 45, engine.workHRSeconds >= 120 {
-            let fraction = engine.workHRSecondsAtIntensity / engine.workHRSeconds
-            let pct = Int((fraction * 100).rounded())
-            let verdict: Verdict = fraction >= 0.7 ? .met : (fraction >= 0.4 ? .partial : .missed)
+        // 2. Per-interval attainment (long intervals only)
+        var gradeable = 0
+        var achieved = 0
+        for (index, phase) in engine.plan.phases.enumerated()
+        where phase.kind == .work && phase.seconds >= 60 && index < engine.workPhaseHadHR.count && engine.workPhaseHadHR[index] {
+            gradeable += 1
+            if engine.workPhaseHitBand[index] { achieved += 1 }
+        }
+        if !easyDay, gradeable >= 2 {
+            let fraction = Double(achieved) / Double(gradeable)
+            let verdict: Verdict = fraction >= 0.75 ? .met : (fraction >= 0.5 ? .partial : .missed)
             let detail: String
             switch verdict {
-            case .met: detail = "Right where the plan wanted you during the efforts."
-            case .partial: detail = "Partly in the zone — hold the target a little longer into each effort."
-            case .missed: detail = "Mostly under the target band — next session's targets may need a nudge up, or longer efforts."
+            case .met: detail = "Nearly every effort reached its target zone — exactly as prescribed."
+            case .partial: detail = "Some efforts stopped short of the zone — hold each one a touch harder or longer."
+            case .missed: detail = "Most efforts never reached the zone — next session's targets may need a nudge up."
             }
             lines.append(Line(verdict: verdict,
-                              title: "\(pct)% of work time in the target zone",
+                              title: "\(achieved) of \(gradeable) efforts reached the target zone",
                               detail: detail))
         }
 
-        // 3. Between-interval recovery
-        if engine.recoveryDrops.count >= 2 {
-            let avg = engine.recoveryDrops.reduce(0, +) / Double(engine.recoveryDrops.count)
-            let verdict: Verdict = avg >= 15 ? .met : (avg >= 8 ? .partial : .missed)
-            let detail: String
-            switch verdict {
-            case .met: detail = "Real recoveries between efforts — exactly what makes the next effort count."
-            case .partial: detail = "Heart rate came down some — slowing the recovery pace would buy more."
-            case .missed: detail = "Heart rate barely fell between efforts — ease right off during recoveries."
+        // 3. Long-recovery quality (≥120s recoveries only)
+        if engine.recoveryMinPcts.count >= 1 {
+            let avgLow = engine.recoveryMinPcts.reduce(0, +) / Double(engine.recoveryMinPcts.count)
+            if avgLow <= 75 {
+                lines.append(Line(verdict: .met,
+                                  title: String(format: "Recoveries reached %.0f%% of max heart rate", avgLow),
+                                  detail: "Real recoveries between the long pushes — that's what makes the next one count."))
+            } else if avgLow <= 80 {
+                lines.append(Line(verdict: .partial,
+                                  title: String(format: "Recoveries reached %.0f%% of max heart rate", avgLow),
+                                  detail: "Close — easing the recovery pace slightly would buy a fuller reset."))
+            } else {
+                // Consistent with guidelines rather than a validated
+                // threshold — advise, don't fail.
+                lines.append(Line(verdict: nil,
+                                  title: String(format: "Recoveries stayed near %.0f%% of max heart rate", avgLow),
+                                  detail: "Heart rate didn't come down much between pushes — worth easing right off during recoveries."))
             }
-            lines.append(Line(verdict: verdict,
-                              title: String(format: "−%.0f bpm average drop between efforts", avg),
-                              detail: detail))
         }
 
         // 4. 1-minute heart-rate recovery after the last hard effort
@@ -105,7 +118,7 @@ enum SessionObjectives {
             switch verdict {
             case .met: detail = "A fast fall-off after the last effort — a strong fitness marker."
             case .partial: detail = "A normal recovery. This number tends to climb as fitness builds."
-            case .missed: detail = "Under 12 bpm in a minute is worth mentioning to a doctor if it repeats."
+            case .missed: detail = "Under 12 bpm in a minute is worth mentioning to a doctor if it keeps happening."
             }
             lines.append(Line(verdict: verdict,
                               title: String(format: "−%.0f bpm one minute after the last effort", hrr),

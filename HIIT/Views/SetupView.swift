@@ -28,6 +28,9 @@ struct SetupView: View {
     /// experience picker on screen for the whole visit even though the
     /// answer is persisted on the first plan build.
     @State private var askExperience = false
+    /// Non-nil when the weekly load guard fired — shown as an overridable
+    /// suggestion banner, never a block.
+    @State private var loadAdvice: String? = nil
     /// False when this configuration has exactly one candidate protocol —
     /// shuffling would provably regenerate the identical plan, so the
     /// "Mix it up" button hides instead of silently doing nothing.
@@ -171,6 +174,26 @@ struct SetupView: View {
                             .onChange(of: level) { _, _ in
                                 resuggest()
                             }
+                        }
+
+                        if let advice = loadAdvice, vibe != .easy {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "moon.zzz.fill")
+                                    .foregroundStyle(Theme.steady)
+                                    .padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(advice)
+                                        .font(.footnote)
+                                    Button("Make it easy") {
+                                        vibe = .easy
+                                        buildPlan()
+                                    }
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(Theme.accent)
+                                }
+                            }
+                            .padding(14)
+                            .background(Theme.steady.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
                         }
 
                         VStack(alignment: .leading, spacing: 6) {
@@ -340,13 +363,10 @@ struct SetupView: View {
         if !askExperience {
             level = settings.experience
         }
-        let progress = fetchProgress()
-        suggestedMinutes = WorkoutGenerator.suggestMinutes(
-            level: level,
-            sessionsCompleted: progress?.sessionsCompleted ?? 0,
-            hardSessionsSinceEasy: progress?.hardSessionsSinceEasy ?? 0)
+        computeSuggestion()
         minutes = suggestedMinutes
         vibe = .auto
+        loadAdvice = weeklyLoadAdvice()
         buildPlan()
         step = .suggestion
     }
@@ -354,13 +374,43 @@ struct SetupView: View {
     /// A first-run experience change re-runs the suggestion too — length
     /// depends on level, and the user hasn't overridden anything yet.
     private func resuggest() {
-        let progress = fetchProgress()
-        suggestedMinutes = WorkoutGenerator.suggestMinutes(
-            level: level,
-            sessionsCompleted: progress?.sessionsCompleted ?? 0,
-            hardSessionsSinceEasy: progress?.hardSessionsSinceEasy ?? 0)
+        computeSuggestion()
         minutes = suggestedMinutes
         buildPlan()
+    }
+
+    private func computeSuggestion() {
+        let progress = fetchProgress()
+        let daysSince = progress?.lastSessionDate.map {
+            Calendar.current.dateComponents([.day], from: $0, to: Date()).day ?? 0
+        }
+        suggestedMinutes = WorkoutGenerator.suggestMinutes(
+            level: level,
+            progression: ProgressionEngine.decayedLevel(progress?.level ?? 0, daysSince: daysSince),
+            sessionsCompleted: progress?.sessionsCompleted ?? 0,
+            hardSessionsSinceEasy: progress?.hardSessionsSinceEasy ?? 0)
+    }
+
+    /// Weekly load guard: 2–3 hard sessions a week with ~48h between them is
+    /// where HIIT adaptations actually land — stacking more mostly adds
+    /// injury and overreaching risk. A triggered guard only *suggests* an
+    /// easier day; the user can always ignore it.
+    private func weeklyLoadAdvice() -> String? {
+        let descriptor = FetchDescriptor<WorkoutSession>(sortBy: [SortDescriptor(\.date, order: .reverse)])
+        guard let sessions = try? context.fetch(descriptor), let last = sessions.first else { return nil }
+        let now = Date()
+        let week = sessions.filter { now.timeIntervalSince($0.date) < 7 * 86400 }
+        let weekMinutes = week.reduce(0.0) { $0 + $1.totalSeconds } / 60
+        if weekMinutes > 150 {
+            return "That's over 150 interval minutes in 7 days — more isn't better. An easier session today protects the gains."
+        }
+        if week.count >= 3 {
+            return "Three or more sessions in the last 7 days — hard training lands best with real recovery between doses."
+        }
+        if now.timeIntervalSince(last.date) < 40 * 3600 && week.count >= 2 {
+            return "Less than two days since your last session. Back-to-back hard days blunt the adaptation you trained for."
+        }
+        return nil
     }
 
     private func buildPlan() {
@@ -393,7 +443,8 @@ struct SetupView: View {
             restingHR: settings.value.restingHR,
             bmi: settings.bmi,
             age: settings.value.age,
-            preferLowImpact: settings.value.preferLowImpact)
+            preferLowImpact: settings.value.preferLowImpact,
+            preferWalkRecoveries: settings.value.preferWalkRecoveries)
         canShuffle = WorkoutGenerator.candidateProtocols(input).count > 1
         plan = WorkoutGenerator.makePlan(input)
     }
