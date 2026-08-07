@@ -1,10 +1,13 @@
 import SwiftUI
 import SwiftData
 
-/// Guided setup: equipment → (machine details, first time only) → session
-/// length & vibe → plan preview. Machine details are remembered per equipment.
+/// Suggestion-first setup: pick where you're training → (machine details,
+/// first time only) → the app proposes a complete workout, length included.
+/// The whole point of the app is coaching people who don't know how to build
+/// workouts, so the plan arrives ready to start — duration and feel are
+/// controls for overriding it, and every change regenerates the plan.
 struct SetupView: View {
-    enum Step { case equipment, machine, session, preview }
+    enum Step { case equipment, machine, suggestion }
 
     let onStart: (WorkoutPlan) -> Void
 
@@ -17,13 +20,20 @@ struct SetupView: View {
     @State private var machine = MachineProfile.defaults(for: .treadmill)
     @State private var level: ExperienceLevel = .beginner
     @State private var minutes = 20
+    @State private var suggestedMinutes = 20
     @State private var vibe: SessionVibe = .auto
     @State private var plan: WorkoutPlan? = nil
     @State private var shuffleOffset = 0
+    /// Captured when the suggestion step is entered: keeps the first-run
+    /// experience picker on screen for the whole visit even though the
+    /// answer is persisted on the first plan build.
+    @State private var askExperience = false
     /// False when this configuration has exactly one candidate protocol —
     /// shuffling would provably regenerate the identical plan, so the
     /// "Mix it up" button hides instead of silently doing nothing.
     @State private var canShuffle = true
+
+    private let presets = [10, 15, 20, 30, 45]
 
     var body: some View {
         NavigationStack {
@@ -31,8 +41,7 @@ struct SetupView: View {
                 switch step {
                 case .equipment: equipmentStep
                 case .machine: machineStep
-                case .session: sessionStep
-                case .preview: previewStep
+                case .suggestion: suggestionStep
                 }
             }
             .navigationTitle(stepTitle)
@@ -60,8 +69,7 @@ struct SetupView: View {
         switch step {
         case .equipment: return "Where are you training?"
         case .machine: return "Your \(equipment.label.lowercased())"
-        case .session: return "Today's session"
-        case .preview: return "Your workout"
+        case .suggestion: return "Your next workout"
         }
     }
 
@@ -69,8 +77,7 @@ struct SetupView: View {
         switch step {
         case .equipment: break
         case .machine: step = .equipment
-        case .session: step = settings.hasConfiguredMachine(for: equipment) && equipment != .outdoor ? .machine : .equipment
-        case .preview: step = .session
+        case .suggestion: step = settings.hasConfiguredMachine(for: equipment) && equipment != .outdoor ? .machine : .equipment
         }
     }
 
@@ -84,7 +91,7 @@ struct SetupView: View {
                         equipment = option
                         machine = settings.machine(for: option)
                         if option == .outdoor || settings.hasConfiguredMachine(for: option) {
-                            step = .session
+                            enterSuggestion()
                         } else {
                             step = .machine
                         }
@@ -125,7 +132,7 @@ struct SetupView: View {
             Section {
                 Button {
                     settings.setMachine(machine, for: equipment)
-                    step = .session
+                    enterSuggestion()
                 } label: {
                     Text("Continue")
                         .font(.headline)
@@ -135,73 +142,37 @@ struct SetupView: View {
         }
     }
 
-    // MARK: - Step 3: session shape
+    // MARK: - Step 3: the suggested workout
 
-    private var sessionStep: some View {
-        Form {
-            // Asked once; after that it lives in Settings and adjusts itself
-            // from results.
-            if settings.value.experienceSetOnce != true {
-                Section("Experience") {
-                    Picker("Experience", selection: $level) {
-                        ForEach(ExperienceLevel.allCases) { option in
-                            Text(option.label).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    Text(level.blurb)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Section("How long have you got?") {
-                HStack(spacing: 8) {
-                    ForEach([10, 15, 20, 30, 45], id: \.self) { preset in
-                        Button {
-                            minutes = preset
-                        } label: {
-                            Text("\(preset)")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 38)
-                                .background(
-                                    minutes == preset ? Theme.accent : Color(.tertiarySystemGroupedBackground),
-                                    in: RoundedRectangle(cornerRadius: 10))
-                                .foregroundStyle(minutes == preset ? Color.white : Color.primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                Stepper("Custom: \(minutes) minutes", value: $minutes, in: 8...60)
-            }
-            Section("Feel") {
-                Picker("Feel", selection: $vibe) {
-                    ForEach(SessionVibe.allCases) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
-            Section {
-                Button {
-                    buildPlan()
-                    step = .preview
-                } label: {
-                    Text("Build my workout")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-        }
-    }
-
-    // MARK: - Step 4: preview
-
-    private var previewStep: some View {
+    private var suggestionStep: some View {
         Group {
             if let plan {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        // Asked once; after that it lives in Settings and
+                        // adjusts itself from results.
+                        if askExperience {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Experience")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                Picker("Experience", selection: $level) {
+                                    ForEach(ExperienceLevel.allCases) { option in
+                                        Text(option.label).tag(option)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                Text(level.blurb)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(14)
+                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                            .onChange(of: level) { _, _ in
+                                resuggest()
+                            }
+                        }
+
                         VStack(alignment: .leading, spacing: 6) {
                             Text(plan.name)
                                 .font(.title2.weight(.bold))
@@ -214,6 +185,10 @@ struct SetupView: View {
                             StatTile(title: "Efforts", value: "\(plan.workPhaseCount)", subtitle: "work intervals")
                             StatTile(title: "Energy", value: "\(previewKcal)", subtitle: "kcal (est.)")
                         }
+
+                        durationControl
+                        feelControl
+
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(plan.phases) { phase in
                                 PhaseRowView(phase: phase, targetLine: targetLine(for: phase.target, equipment: plan.equipment, settings: settings))
@@ -260,6 +235,87 @@ struct SetupView: View {
         }
     }
 
+    /// Duration chips with the coach's suggestion marked; any tap or stepper
+    /// change is a user override and regenerates the plan immediately.
+    private var durationControl: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("Length")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if minutes != suggestedMinutes {
+                    Button {
+                        minutes = suggestedMinutes
+                        buildPlan()
+                    } label: {
+                        Text("Coach suggests \(suggestedMinutes) min")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            HStack(spacing: 8) {
+                ForEach(presets, id: \.self) { preset in
+                    Button {
+                        minutes = preset
+                        buildPlan()
+                    } label: {
+                        VStack(spacing: 1) {
+                            Text("\(preset)")
+                                .font(.subheadline.weight(.semibold))
+                            if preset == suggestedMinutes {
+                                Circle()
+                                    .fill(minutes == preset ? Color.white : Theme.accent)
+                                    .frame(width: 4, height: 4)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 38)
+                        .background(
+                            minutes == preset ? Theme.accent : Color(.tertiarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(minutes == preset ? Color.white : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Stepper("Custom: \(minutes) minutes", value: minutesBinding, in: 8...60)
+                .font(.subheadline)
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var feelControl: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Feel")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Picker("Feel", selection: $vibe) {
+                ForEach(SessionVibe.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: vibe) { _, _ in
+                buildPlan()
+            }
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var minutesBinding: Binding<Int> {
+        Binding(
+            get: { minutes },
+            set: { newValue in
+                minutes = newValue
+                buildPlan()
+            })
+    }
+
     private var previewKcal: Int {
         guard let plan else { return 0 }
         let records = plan.phases.map { phase in
@@ -277,8 +333,40 @@ struct SetupView: View {
 
     // MARK: - Plan generation
 
+    /// Entering the suggestion step: the app picks the session length from
+    /// training history and builds the plan before the screen appears.
+    private func enterSuggestion() {
+        askExperience = settings.value.experienceSetOnce != true
+        if !askExperience {
+            level = settings.experience
+        }
+        let progress = fetchProgress()
+        suggestedMinutes = WorkoutGenerator.suggestMinutes(
+            level: level,
+            sessionsCompleted: progress?.sessionsCompleted ?? 0,
+            hardSessionsSinceEasy: progress?.hardSessionsSinceEasy ?? 0)
+        minutes = suggestedMinutes
+        vibe = .auto
+        buildPlan()
+        step = .suggestion
+    }
+
+    /// A first-run experience change re-runs the suggestion too — length
+    /// depends on level, and the user hasn't overridden anything yet.
+    private func resuggest() {
+        let progress = fetchProgress()
+        suggestedMinutes = WorkoutGenerator.suggestMinutes(
+            level: level,
+            sessionsCompleted: progress?.sessionsCompleted ?? 0,
+            hardSessionsSinceEasy: progress?.hardSessionsSinceEasy ?? 0)
+        minutes = suggestedMinutes
+        buildPlan()
+    }
+
     private func buildPlan() {
-        if settings.value.experienceSetOnce != true {
+        // On the first run the picker's answer is persisted immediately —
+        // askExperience keeps the control visible for the rest of the visit.
+        if askExperience {
             settings.experience = level
             settings.value.experienceSetOnce = true
         } else {

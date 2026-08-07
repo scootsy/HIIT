@@ -133,6 +133,39 @@ enum WorkoutGenerator {
             phases: phases)
     }
 
+    // MARK: - Session-length suggestion
+
+    /// The app picks the session length, not the user — this is a coaching
+    /// app for people who don't know how to build workouts. Anchored to
+    /// common prescription: ~2–3 vigorous sessions a week of 15–35 minutes
+    /// including warm-up and cool-down, shorter while starting out, with a
+    /// longer session rotated in periodically once a rhythm is established
+    /// (which also unlocks the 26+ minute Norwegian 4×4). Deload days are
+    /// deliberately shorter. The user can always override.
+    static func suggestMinutes(level: ExperienceLevel, sessionsCompleted: Int, hardSessionsSinceEasy: Int) -> Int {
+        var minutes: Int
+        switch level {
+        case .beginner: minutes = 15
+        case .intermediate: minutes = 20
+        case .advanced: minutes = 25
+        }
+        // A few completed sessions earn a slightly longer default.
+        if sessionsCompleted >= 3 {
+            minutes += 5
+        }
+        // Every 4th session goes long — variety in duration is part of the
+        // programming, and it makes room for the 4×4 protocol.
+        if level != .beginner && sessionsCompleted >= 3 && sessionsCompleted % 4 == 3 {
+            minutes += 10
+        }
+        // The generator converts the next auto session into a deload —
+        // suggest a shorter one so "lighter" means lighter in time too.
+        if hardSessionsSinceEasy >= 5 {
+            minutes = min(minutes, 20)
+        }
+        return min(minutes, 45)
+    }
+
     // MARK: - Protocol selection
 
     /// The protocols this configuration can rotate through. Also used by the
