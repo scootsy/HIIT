@@ -45,7 +45,7 @@ struct WorkoutLiveActivity: Widget {
                     .padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    if let message = context.state.suggestionMessage {
+                    if let message = context.state.suggestionMessage, !context.isStale {
                         HStack(spacing: 8) {
                             Image(systemName: context.state.suggestionEaseOff
                                   ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
@@ -164,8 +164,8 @@ struct WorkoutLiveActivity: Widget {
 
 private struct LockScreenWorkoutView: View {
     let context: ActivityViewContext<WorkoutActivityAttributes>
-    @Environment(\.isActivityStale) private var isStale
 
+    private var isStale: Bool { context.isStale }
     private var state: WorkoutActivityAttributes.ContentState { context.state }
     private var tint: Color { WorkoutActivityStyle.tint(forPhaseKind: state.phaseKindRaw) }
 

@@ -286,8 +286,8 @@ enum CoachService {
             headers: ["x-goog-api-key": apiKey],
             body: [
                 "systemInstruction": ["parts": [["text": systemPrompt]]],
-                "contents": turns.map {
-                    ["role": $0.role == .user ? "user" : "model", "parts": [["text": $0.text]]]
+                "contents": turns.map { turn -> [String: Any] in
+                    ["role": turn.role == .user ? "user" : "model", "parts": [["text": turn.text]]]
                 },
                 "generationConfig": ["maxOutputTokens": 6000],
             ])

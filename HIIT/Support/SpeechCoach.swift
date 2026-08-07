@@ -45,7 +45,7 @@ enum SpeechScript {
             return "Next: " + phrase(kind: next.kind, target: target, useMetric: useMetric)
         case .phaseStart(let phase, let target):
             let text = phrase(kind: phase.kind, target: target, useMetric: useMetric)
-            return text.prefix(1).uppercased() + text.dropFirst()
+            return text.prefix(1).uppercased() + String(text.dropFirst())
         case .halfway:
             return "Halfway"
         case .suggestion(let suggestion):
