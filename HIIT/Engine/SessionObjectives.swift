@@ -21,6 +21,26 @@ import Foundation
 ///   tracks with good aerobic fitness.
 enum SessionObjectives {
 
+    // Thresholds shared with the engine's zone accounting and the live
+    // coach's trigger rules, so live nudges and these grades can't drift.
+
+    /// Points of tolerance under every band floor — the bands sit on an
+    /// *estimated* max HR (age formulas carry ~7–11 bpm of individual error).
+    static let bandTolerancePct = 2.0
+    /// Bouts under a minute are never judged on HR — a maximal 20s sprint
+    /// can end before heart rate reacts at all.
+    static let minGradeableEffortSeconds = 60.0
+    /// HR must cover this share of the prescribed work before the intensity
+    /// dose is graded — a strap dropout must not read as "under the zone".
+    static let hrCoverageFraction = 0.8
+    /// Long-recovery low point, as %maxHR: real reset vs "didn't come down".
+    static let recoveryMetPct = 75.0
+    static let recoveryPartialPct = 80.0
+    /// 1-minute heart-rate recovery: ≥25 tracks with good aerobic fitness,
+    /// <12 is the validated clinical flag (Cole 1999).
+    static let hrrGoodBPM = 25.0
+    static let hrrFlagBPM = 12.0
+
     enum Verdict {
         case met, partial, missed
     }
@@ -50,7 +70,7 @@ enum SessionObjectives {
                 lines.append(Line(verdict: nil,
                                   title: doseText,
                                   detail: "An easy day on purpose — no intensity target today."))
-            } else if prescribedWork > 0, engine.workHRSeconds < 0.8 * prescribedWork {
+            } else if prescribedWork > 0, engine.workHRSeconds < hrCoverageFraction * prescribedWork {
                 // A strap dropout must not read as "under the zone": grade
                 // the dose only when HR actually covered most of the work.
                 lines.append(Line(verdict: nil,
@@ -79,7 +99,7 @@ enum SessionObjectives {
         var gradeable = 0
         var achieved = 0
         for (index, phase) in engine.plan.phases.enumerated()
-        where phase.kind == .work && phase.seconds >= 60 && index < engine.workPhaseHadHR.count && engine.workPhaseHadHR[index] {
+        where phase.kind == .work && phase.seconds >= minGradeableEffortSeconds && index < engine.workPhaseHadHR.count && engine.workPhaseHadHR[index] {
             gradeable += 1
             if engine.workPhaseHitBand[index] { achieved += 1 }
         }
@@ -100,11 +120,11 @@ enum SessionObjectives {
         // 3. Long-recovery quality (≥120s recoveries only)
         if engine.recoveryMinPcts.count >= 1 {
             let avgLow = engine.recoveryMinPcts.reduce(0, +) / Double(engine.recoveryMinPcts.count)
-            if avgLow <= 75 {
+            if avgLow <= recoveryMetPct {
                 lines.append(Line(verdict: .met,
                                   title: String(format: "Recoveries reached %.0f%% of max heart rate", avgLow),
                                   detail: "Real recoveries between the long pushes — that's what makes the next one count."))
-            } else if avgLow <= 80 {
+            } else if avgLow <= recoveryPartialPct {
                 lines.append(Line(verdict: .partial,
                                   title: String(format: "Recoveries reached %.0f%% of max heart rate", avgLow),
                                   detail: "Close — easing the recovery pace slightly would buy a fuller reset."))
@@ -119,7 +139,7 @@ enum SessionObjectives {
 
         // 4. 1-minute heart-rate recovery after the last hard effort
         if let hrr = engine.hrRecovery {
-            let verdict: Verdict = hrr >= 25 ? .met : (hrr >= 12 ? .partial : .missed)
+            let verdict: Verdict = hrr >= hrrGoodBPM ? .met : (hrr >= hrrFlagBPM ? .partial : .missed)
             let detail: String
             switch verdict {
             case .met: detail = "A fast fall-off after the last effort — a strong fitness marker."
@@ -129,6 +149,16 @@ enum SessionObjectives {
             lines.append(Line(verdict: verdict,
                               title: String(format: "−%.0f bpm one minute after the last effort", hrr),
                               detail: detail))
+        }
+
+        // 5. Live-coach activity — informational only. Accepted corrections
+        // are already baked into the grades above and next session's start.
+        if engine.coachSuggestionsOffered > 0 {
+            let offered = engine.coachSuggestionsOffered
+            let word = offered == 1 ? "suggestion" : "suggestions"
+            lines.append(Line(verdict: nil,
+                              title: "Live coach: \(engine.coachSuggestionsAccepted) of \(offered) \(word) applied",
+                              detail: "Mid-session corrections you approved are already counted in today's grades and next session's targets."))
         }
 
         return lines.isEmpty ? nil : lines

@@ -27,6 +27,8 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 
 **It guides you through it.** A full-screen, phase-colored timer with a big countdown ring, the exact speed/incline or resistance/cadence to hit, and — the detail that matters on a treadmill — an **amber early warning before every step up**, sized to your machine's lag, so you can press the buttons before the interval starts. Cues are synthesized tones played through the media channel (they work with the ringer switch off and mix over your music): low beeps count the warning down (lead, 10, 6, 3, 2, 1), then a high **GO** when the harder phase lands. Slow-downs get no warning — braking early just cuts the effort short — instead each work interval counts itself out with the same beeps and a distinct done tone, so you push through to the line. If live heart rate is available (Apple Watch workout or a chest strap), it nudges you in real time when you're above or below the target zone. Feeling better than the plan? Tap **±** on the live target ("it said 5.0 but I'm running 5.5") — the change applies to the rest of the session, the calorie/distance math follows what you actually did, and the next session starts where you actually trained.
 
+**It coaches the day, not just the plan.** With live heart rate, a rule-based live coach watches the session against its objectives and offers **one-tap corrections** when the day drifts from the plan: sustained HR above the zone → "ease the remaining efforts back"; two efforts in a row that never reach the zone → "you've got more in you"; recoveries that aren't coming down, or a slow 1-minute recovery → ease off. Suggestions appear as a small chip with the exact new target ("drop to 6.8 mph · 2 efforts left") — **Apply** routes through the same override path as the manual ±, so nothing changes unless you say so, and what you accept counts toward next session's starting point. It's deliberately bounded: one suggestion at a time, a cooldown between them, at most a few tenths per session, never during warm-up/cool-down, and never judging an effort HR hasn't had time to catch.
+
 **It learns.** After each session you rate the effort (RPE 1–10). Finish everything comfortably and next session's targets step up; a maximal or unfinished session holds or steps back; heart-rate data can veto increases after sessions that ran too hot. Every ~6th hard session is deliberately lighter — a recovery week you don't have to remember to schedule.
 
 **It grades the session.** With live heart rate, the summary answers "did this workout do its job?" in plain language: time at ≥85% of max HR (the high-intensity dose HIIT is programmed for), the share of work time spent in the target zone, how far your heart rate fell between efforts, and your 1-minute recovery after the last one — each marked met, partial, or missed, with what to change next time.
@@ -74,6 +76,7 @@ HIIT/
 ├── Engine/
 │   ├── WorkoutGenerator.swift Protocol selection + target math (the brain)
 │   ├── WorkoutEngine.swift    Live timer state machine, cues, HR aggregation
+│   ├── LiveCoach.swift        Rule-based in-session suggestions (one-tap apply)
 │   ├── SessionObjectives.swift Post-session HR-based objective grading
 │   ├── ProgressionEngine.swift Progressive-overload rules
 │   └── MetabolicMath.swift    ACSM MET equations, calories, HR zones
