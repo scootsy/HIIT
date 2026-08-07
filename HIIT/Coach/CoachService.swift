@@ -34,9 +34,11 @@ enum CoachProvider: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// Optional AI coach: sends a compact summary of recent sessions to the
-/// user's chosen provider (with their own key) and returns short, practical
-/// feedback. Entirely opt-in — the app works fully without it.
+/// Optional AI coach: a small chat grounded in a compact summary of recent
+/// sessions, sent to the user's chosen provider (with their own key). The
+/// model can *propose* concrete plan changes through a fixed action menu —
+/// rendered as tap-to-confirm buttons; nothing applies without the user's
+/// tap. Entirely opt-in — the app works fully without it.
 enum CoachService {
 
     struct CoachError: LocalizedError {
@@ -44,12 +46,42 @@ enum CoachService {
         var errorDescription: String? { message }
     }
 
-    private static let systemPrompt = """
-    You are a friendly, evidence-based HIIT coach reviewing a user's recent workout data from their interval-training app. \
-    Reply with: a short assessment (2-3 sentences), then 2 specific and actionable suggestions for upcoming sessions, \
-    then one line of encouragement. Be concrete about paces, durations, and recovery. Plain text only, no markdown. \
-    You are not a medical professional; if anything in the data looks concerning, suggest they check with one.
+    struct ChatTurn {
+        enum Role { case user, assistant }
+        var role: Role
+        var text: String
+    }
+
+    private static let coachPersona = """
+    You are a friendly, evidence-based HIIT coach inside an interval-training app, chatting with the user about their \
+    recent training. Be concrete about paces, durations, and recovery. Keep replies under 150 words, plain text only, \
+    no markdown. You are not a medical professional; if anything in the data looks concerning, suggest they check with one.
     """
+
+    private static let firstReplyStyle = """
+    For your FIRST reply only: a short assessment (2-3 sentences), then 2 specific and actionable suggestions for \
+    upcoming sessions, then one line of encouragement.
+    """
+
+    /// The model proposes changes as machine-readable trailing lines; the app
+    /// renders them as buttons. Line-based (not fenced JSON) because all three
+    /// providers reproduce plain prefixed lines far more reliably.
+    private static let actionProtocol = """
+    You can also propose real changes to the user's plan — but only when they ask for a change (easier, harder, \
+    shorter, longer, walking recoveries). Propose at most 2 by adding, as the FINAL lines of your reply, one line \
+    each in exactly this form (no markdown, no backticks):
+    ACTION {"type":"adjust_level","equipment":"treadmill","delta":-1,"label":"Ease treadmill targets one notch"}
+    Allowed actions:
+    - {"type":"adjust_level","equipment":"treadmill"|"bike"|"outdoor","delta":-2..2,"label":"..."} — shifts that equipment's difficulty (one level ≈ 0.2 mph of work speed).
+    - {"type":"set_next_minutes","minutes":8..60,"label":"..."} — the length of the user's next session.
+    - {"type":"prefer_walk_recoveries","enabled":true|false,"label":"..."} — walking vs jogging treadmill recoveries.
+    The app shows these as buttons the user must tap to apply. Never claim an action has been applied, and never \
+    invent other action types.
+    """
+
+    static var systemPrompt: String {
+        [coachPersona, firstReplyStyle, actionProtocol].joined(separator: "\n\n")
+    }
 
     /// True when the user has saved a key for their selected provider —
     /// gates every "Ask the AI coach" entry point in the UI.
@@ -57,11 +89,98 @@ enum CoachService {
         KeychainHelper.load(provider: provider)?.isEmpty == false
     }
 
-    static func feedback(provider: CoachProvider, apiKey: String, summary: String) async throws -> String {
+    static func chat(provider: CoachProvider, apiKey: String, turns: [ChatTurn]) async throws -> String {
+        // Anthropic and Gemini require strictly alternating roles, and hidden
+        // app notes (applied actions) can stack consecutive user turns —
+        // collapse them before every request.
+        let merged = merged(turns)
         switch provider {
-        case .anthropic: return try await anthropicFeedback(apiKey: apiKey, summary: summary)
-        case .openai: return try await openAIFeedback(apiKey: apiKey, summary: summary)
-        case .gemini: return try await geminiFeedback(apiKey: apiKey, summary: summary)
+        case .anthropic: return try await anthropicChat(apiKey: apiKey, turns: merged)
+        case .openai: return try await openAIChat(apiKey: apiKey, turns: merged)
+        case .gemini: return try await geminiChat(apiKey: apiKey, turns: merged)
+        }
+    }
+
+    private static func merged(_ turns: [ChatTurn]) -> [ChatTurn] {
+        var result: [ChatTurn] = []
+        for turn in turns {
+            if let last = result.last, last.role == turn.role {
+                result[result.count - 1].text = last.text + "\n\n" + turn.text
+            } else {
+                result.append(turn)
+            }
+        }
+        return result
+    }
+
+    // MARK: - Proposed actions
+
+    /// A change the model proposed. Applied only by an explicit user tap,
+    /// through the app's ordinary setters — the model itself writes nothing.
+    struct CoachAction: Identifiable, Equatable {
+        let id = UUID()
+        var type: String
+        var equipment: String?
+        var delta: Int?
+        var minutes: Int?
+        var enabled: Bool?
+        var label: String
+
+        var isValid: Bool {
+            switch type {
+            case "adjust_level":
+                guard let delta, (-2...2).contains(delta), delta != 0,
+                      let equipment, Equipment(rawValue: equipment) != nil else { return false }
+                return true
+            case "set_next_minutes":
+                guard let minutes, (8...60).contains(minutes) else { return false }
+                return true
+            case "prefer_walk_recoveries":
+                return enabled != nil
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Splits a model reply into display text and validated proposed actions.
+    /// Malformed or out-of-menu lines are dropped silently — the reply text
+    /// still renders.
+    static func parseActions(from reply: String) -> (text: String, actions: [CoachAction]) {
+        var textLines: [String] = []
+        var actions: [CoachAction] = []
+        for line in reply.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("ACTION "),
+               let data = String(trimmed.dropFirst(7)).data(using: .utf8),
+               let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                var action = CoachAction(
+                    type: (raw["type"] as? String) ?? "",
+                    equipment: raw["equipment"] as? String,
+                    delta: raw["delta"] as? Int,
+                    minutes: raw["minutes"] as? Int,
+                    enabled: raw["enabled"] as? Bool,
+                    label: (raw["label"] as? String) ?? "")
+                if action.label.isEmpty { action.label = fallbackLabel(action) }
+                if action.isValid, actions.count < 2 { actions.append(action) }
+            } else {
+                textLines.append(line)
+            }
+        }
+        return (textLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), actions)
+    }
+
+    private static func fallbackLabel(_ action: CoachAction) -> String {
+        switch action.type {
+        case "adjust_level":
+            let delta = action.delta ?? 0
+            return "\(delta > 0 ? "Raise" : "Ease") \(action.equipment ?? "") targets \(abs(delta) == 1 ? "one notch" : "\(abs(delta)) notches")"
+        case "set_next_minutes":
+            return "Make the next session \(action.minutes ?? 0) minutes"
+        case "prefer_walk_recoveries":
+            return (action.enabled == true) ? "Switch to walking recoveries" : "Switch to jogging recoveries"
+        default:
+            return "Apply change"
         }
     }
 
@@ -108,7 +227,7 @@ enum CoachService {
 
     // MARK: - Anthropic
 
-    private static func anthropicFeedback(apiKey: String, summary: String) async throws -> String {
+    private static func anthropicChat(apiKey: String, turns: [ChatTurn]) async throws -> String {
         // max_tokens caps the model's thinking plus the visible reply on this
         // model, so leave generous headroom over the short reply we expect.
         let json = try await post(
@@ -119,7 +238,9 @@ enum CoachService {
                 "max_tokens": 6000,
                 "output_config": ["effort": "low"],
                 "system": systemPrompt,
-                "messages": [["role": "user", "content": summary]],
+                "messages": turns.map {
+                    ["role": $0.role == .user ? "user" : "assistant", "content": $0.text]
+                },
             ])
         let stopReason = json["stop_reason"] as? String
         if stopReason == "refusal" {
@@ -134,20 +255,19 @@ enum CoachService {
 
     // MARK: - OpenAI
 
-    private static func openAIFeedback(apiKey: String, summary: String) async throws -> String {
+    private static func openAIChat(apiKey: String, turns: [ChatTurn]) async throws -> String {
         // GPT-5-family models spend reasoning tokens from the same cap as the
         // visible reply (and only accept max_completion_tokens), so leave the
         // same generous headroom here.
+        let messages: [[String: String]] = [["role": "system", "content": systemPrompt]]
+            + turns.map { ["role": $0.role == .user ? "user" : "assistant", "content": $0.text] }
         let json = try await post(
             url: "https://api.openai.com/v1/chat/completions",
             headers: ["Authorization": "Bearer \(apiKey)"],
             body: [
                 "model": "gpt-5-mini",
                 "max_completion_tokens": 6000,
-                "messages": [
-                    ["role": "system", "content": systemPrompt],
-                    ["role": "user", "content": summary],
-                ],
+                "messages": messages,
             ])
         let choice = (json["choices"] as? [[String: Any]])?.first
         let text = ((choice?["message"] as? [String: Any])?["content"] as? String) ?? ""
@@ -158,7 +278,7 @@ enum CoachService {
 
     // MARK: - Gemini
 
-    private static func geminiFeedback(apiKey: String, summary: String) async throws -> String {
+    private static func geminiChat(apiKey: String, turns: [ChatTurn]) async throws -> String {
         // Gemini 2.5 models think by default and the thinking budget draws
         // from maxOutputTokens — generous headroom again.
         let json = try await post(
@@ -166,7 +286,9 @@ enum CoachService {
             headers: ["x-goog-api-key": apiKey],
             body: [
                 "systemInstruction": ["parts": [["text": systemPrompt]]],
-                "contents": [["role": "user", "parts": [["text": summary]]]],
+                "contents": turns.map { turn -> [String: Any] in
+                    ["role": turn.role == .user ? "user" : "model", "parts": [["text": turn.text]]]
+                },
                 "generationConfig": ["maxOutputTokens": 6000],
             ])
         let candidate = (json["candidates"] as? [[String: Any]])?.first

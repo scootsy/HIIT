@@ -392,6 +392,11 @@ struct SetupView: View {
             progression: ProgressionEngine.decayedLevel(progress?.level ?? 0, daysSince: daysSince),
             sessionsCompleted: progress?.sessionsCompleted ?? 0,
             hardSessionsSinceEasy: progress?.hardSessionsSinceEasy ?? 0)
+        // A length the AI coach proposed and the user approved outranks the
+        // heuristic (it's cleared once a session is saved).
+        if let requested = settings.value.coachRequestedMinutes {
+            suggestedMinutes = min(60, max(8, requested))
+        }
     }
 
     /// Weekly load guard: 2–3 hard sessions a week with ~48h between them is
@@ -447,7 +452,8 @@ struct SetupView: View {
             bmi: settings.bmi,
             age: settings.value.age,
             preferLowImpact: settings.value.preferLowImpact,
-            preferWalkRecoveries: settings.value.preferWalkRecoveries)
+            preferWalkRecoveries: settings.value.preferWalkRecoveries,
+            hrSpeedModel: SpeedCalibration.fit(settings.value.speedCalibrationPoints[equipment.rawValue] ?? []))
         canShuffle = WorkoutGenerator.candidateProtocols(input).count > 1
         plan = WorkoutGenerator.makePlan(input)
     }

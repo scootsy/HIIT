@@ -13,6 +13,7 @@ struct AppSettings: Codable {
     var preferWalkRecoveries: Bool = false
     var soundOn: Bool = true
     var hapticsOn: Bool = true
+    var spokenCuesOn: Bool = true
     var machines: [String: MachineProfile] = [:]
     var lastEquipmentRaw: String? = nil
     var healthConnected: Bool = false
@@ -26,6 +27,14 @@ struct AppSettings: Codable {
     /// Kept in settings (UserDefaults) so no SwiftData schema change.
     var progressWeekAnchorDates: [String: Date] = [:]
     var progressWeekAnchorLevels: [String: Double] = [:]
+    /// A next-session length the AI coach proposed and the user approved.
+    /// Consumed by the setup screen's suggestion; cleared when a session is
+    /// saved so it applies to the next workout only.
+    var coachRequestedMinutes: Int? = nil
+    /// Observed (speed, %maxHR) pairs per equipment — the personal
+    /// speed→heart-rate calibration the generator leans on once enough
+    /// sessions with live HR have accumulated.
+    var speedCalibrationPoints: [String: [SpeedCalibration.Point]] = [:]
 
     init() {}
 
@@ -45,6 +54,7 @@ struct AppSettings: Codable {
         preferWalkRecoveries = (try? c.decodeIfPresent(Bool.self, forKey: .preferWalkRecoveries)) ?? false
         soundOn = (try? c.decodeIfPresent(Bool.self, forKey: .soundOn)) ?? true
         hapticsOn = (try? c.decodeIfPresent(Bool.self, forKey: .hapticsOn)) ?? true
+        spokenCuesOn = (try? c.decodeIfPresent(Bool.self, forKey: .spokenCuesOn)) ?? true
         machines = (try? c.decodeIfPresent([String: MachineProfile].self, forKey: .machines)) ?? [:]
         lastEquipmentRaw = try? c.decodeIfPresent(String.self, forKey: .lastEquipmentRaw)
         healthConnected = (try? c.decodeIfPresent(Bool.self, forKey: .healthConnected)) ?? false
@@ -55,6 +65,8 @@ struct AppSettings: Codable {
         coachProviderRaw = (try? c.decodeIfPresent(String.self, forKey: .coachProviderRaw)) ?? CoachProvider.anthropic.rawValue
         progressWeekAnchorDates = (try? c.decodeIfPresent([String: Date].self, forKey: .progressWeekAnchorDates)) ?? [:]
         progressWeekAnchorLevels = (try? c.decodeIfPresent([String: Double].self, forKey: .progressWeekAnchorLevels)) ?? [:]
+        coachRequestedMinutes = try? c.decodeIfPresent(Int.self, forKey: .coachRequestedMinutes)
+        speedCalibrationPoints = (try? c.decodeIfPresent([String: [SpeedCalibration.Point]].self, forKey: .speedCalibrationPoints)) ?? [:]
     }
 }
 

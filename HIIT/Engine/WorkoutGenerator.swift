@@ -17,6 +17,9 @@ struct GeneratorInput {
     /// Advanced runners default to jog recoveries (5.0 mph); this swaps
     /// them for a brisk walk (≤3.7 mph, optional incline) instead.
     var preferWalkRecoveries: Bool = false
+    /// Personal speed→%maxHR line fitted from past sessions with live HR —
+    /// when present, work speeds lean on observed response, not just level.
+    var hrSpeedModel: SpeedCalibration.Model? = nil
 }
 
 /// Builds a complete session from the user's equipment, experience, time budget
@@ -351,6 +354,16 @@ enum WorkoutGenerator {
         }
         // Progressive overload: each level step is worth +0.2 mph on the work speed.
         work += ProgressionEngine.speedPerLevelMph * input.progression
+        // Personal calibration: once enough sessions with live HR exist, the
+        // observed speed→%maxHR line says where ~88% actually lives for this
+        // user. Meet the heuristic halfway, bounded to ±0.6 mph so one odd
+        // block of sessions can't yank targets around. The Norwegian and
+        // sprint speeds derive from this one, so they inherit the correction.
+        if let model = input.hrSpeedModel {
+            let personal = model.speed(atPercent: 88)
+            let blended = (work + personal) / 2
+            work = max(work - 0.6, min(work + 0.6, blended))
+        }
 
         // Walking recoveries on request (and always in low-impact mode):
         // capped below the gait-transition zone.

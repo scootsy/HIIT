@@ -135,6 +135,31 @@ enum SessionSaver {
                 settings.value.progressWeekAnchorLevels[key] = (settings.value.progressWeekAnchorLevels[key] ?? 0) + tierDelta
             }
         }
+        // A coach-requested next-session length was for this workout's setup —
+        // completing a session consumes it.
+        settings.value.coachRequestedMinutes = nil
+        // Speed→HR calibration point: today's observed pairing of average
+        // work speed and average work heart rate. Treadmill/outdoor only —
+        // bike resistance isn't comparable across machines. Requires a real
+        // work dose (≥4 min of ≥60s efforts) and a plausible average so a
+        // strap dropout can't poison the fit.
+        if result.plan.equipment != .bike,
+           let hrPercent, hrPercent > 60, hrPercent < 105 {
+            let workRecords = result.records.filter {
+                $0.kind == PhaseKind.work.rawValue && $0.actualSeconds >= 60 && $0.speedMph != nil
+            }
+            let coveredSecs = workRecords.reduce(0.0) { $0 + $1.actualSeconds }
+            if coveredSecs >= 240 {
+                let avgSpeed = workRecords.reduce(0.0) { $0 + ($1.speedMph ?? 0) * $1.actualSeconds } / coveredSecs
+                var points = settings.value.speedCalibrationPoints[equipKey] ?? []
+                points.append(SpeedCalibration.Point(speedMph: (avgSpeed * 10).rounded() / 10,
+                                                     hrPct: hrPercent, date: result.endDate))
+                if points.count > SpeedCalibration.maxPoints {
+                    points.removeFirst(points.count - SpeedCalibration.maxPoints)
+                }
+                settings.value.speedCalibrationPoints[equipKey] = points
+            }
+        }
         WorkoutCheckpoint.clear()
         return Outcome(session: session, note: note)
     }

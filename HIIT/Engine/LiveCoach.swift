@@ -90,6 +90,37 @@ final class LiveCoach {
     private var hrrFired = false
     private var lastAppliedTargets: [PhaseTarget]? = nil
 
+    /// "DROP TO 6.8 MPH · 2 EFFORTS LEFT" — the projected value after the
+    /// same clamping adjustTarget will apply, in the user's units. Shared by
+    /// the in-app chip and the lock-screen Live Activity so the two never
+    /// show different numbers.
+    static func valueText(for suggestion: Suggestion, engine: WorkoutEngine, useMetric: Bool) -> String {
+        guard suggestion.anchorIndex < engine.appliedTargets.count else { return "" }
+        let verb = suggestion.steps < 0 ? "DROP TO" : "RAISE TO"
+        let target = engine.appliedTargets[suggestion.anchorIndex]
+        var value: String
+        if engine.plan.equipment == .bike, let resistance = target.resistance {
+            let projected = max(1, min(engine.machine.maxResistance, resistance + suggestion.steps))
+            value = "\(verb) R\(projected)"
+        } else if let speed = target.speedMph {
+            let raw = ((speed + 0.1 * Double(suggestion.steps)) * 10).rounded() / 10
+            let projected = max(0.5, min(engine.machine.maxSpeedMph, raw))
+            let display = useMetric
+                ? String(format: "%.1f KM/H", projected * 1.60934)
+                : String(format: "%.1f MPH", projected)
+            value = "\(verb) \(display)"
+        } else {
+            return ""
+        }
+        if engine.plan.phases[suggestion.anchorIndex].kind == .work {
+            let remaining = engine.plan.phases.indices.filter {
+                $0 >= engine.phaseIndex && engine.plan.phases[$0].kind == .work
+            }.count
+            value += remaining == 1 ? " · LAST EFFORT" : " · \(remaining) EFFORTS LEFT"
+        }
+        return value
+    }
+
     // MARK: - Lifecycle notes from the engine
 
     func noteAccepted(_ suggestion: Suggestion) {

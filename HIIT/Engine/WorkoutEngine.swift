@@ -9,10 +9,12 @@ import AVFoundation
 /// produces the final SessionResult.
 ///
 /// Cue design: only *harder* upcoming targets get the amber warning and its
-/// countdown (low beeps at the lead mark, 10, 6, 3, 2, 1 — then a high GO),
-/// because that's when the machine needs ramp time. Slow-downs get no warning
-/// at all — braking early just cuts the effort short — but a finishing work
-/// phase counts itself out with the same beeps and a distinct "done" tone.
+/// audible run-in, because that's when the machine needs ramp time. The cue
+/// language is semantic (see TonePlayer.Tone): one heads-up double-beep at
+/// the warning lead, a rising 3-2-1, then the high GO — and long work efforts
+/// get a halfway marker. Slow-downs get no warning at all — braking early
+/// just cuts the effort short — but a finishing work phase counts itself out
+/// with the same 3-2-1 and a distinct "done" tone.
 ///
 /// Beep timing: countdown tones are pre-scheduled a fraction of a second ahead
 /// on the audio engine's own clock (compensating for tick granularity and the
@@ -225,19 +227,39 @@ final class WorkoutEngine {
         return .none
     }
 
-    /// Seconds-remaining marks that get a low beep: lead, 10, 6, 3, 2, 1 —
-    /// low-low-low, then the phase change lands the high GO (or done) tone.
-    private var beepSchedule: [Int] {
+    /// The audible cue map for the current phase, as seconds-remaining →
+    /// tone. Each sound *shape* has one meaning, so the session reads
+    /// eyes-free: a heads-up double-beep at the warning lead (≥5s out, when
+    /// you should reach for the machine), a rising 3-2-1 whose pitch encodes
+    /// proximity without counting, and — inside long efforts — a halfway
+    /// marker. The phase change itself lands the high GO (or done) tone.
+    private var cueMarks: [(second: Int, tone: TonePlayer.Tone)] {
+        var marks: [(second: Int, tone: TonePlayer.Tone)] = []
         let lead: Double
         switch phaseEndCue {
         case .rampUp: lead = effectiveCueLead
         case .effortDone: lead = min(10, currentPhase.seconds / 2)
-        case .none: return []
+        case .none: lead = 0
         }
-        var marks = [10, 6, 3, 2, 1].filter { Double($0) <= lead }
-        let leadMark = Int(lead.rounded())
-        if leadMark > 3 && !marks.contains(leadMark) {
-            marks.insert(leadMark, at: 0)
+        if lead > 0 {
+            for (second, tone) in [(3, TonePlayer.Tone.count3), (2, .count2), (1, .count1)]
+            where Double(second) <= lead {
+                marks.append((second, tone))
+            }
+            // With less than ~5s of lead there is no meaningful "get ready"
+            // moment separate from the countdown itself.
+            let prepMark = Int(lead.rounded())
+            if prepMark >= 5 {
+                marks.append((prepMark, .prep))
+            }
+        }
+        // Halfway through long efforts — a mid-push progress marker so a
+        // 3-minute interval isn't a silent void between countdown bursts.
+        if currentPhase.kind == .work, currentPhase.seconds > 40 {
+            let half = Int((currentPhase.seconds / 2).rounded())
+            if !marks.contains(where: { $0.second == half }) {
+                marks.append((half, .halfway))
+            }
         }
         return marks
     }
@@ -278,6 +300,40 @@ final class WorkoutEngine {
         }
     }
 
+    // MARK: - Spoken cues
+
+    /// The engine decides *when* to speak; the container supplies *what* to
+    /// say (it owns unit formatting). A nil line stays quiet.
+    var spokenCuesOn = false
+    var speechLine: ((SpeechEvent) -> String?)? = nil
+
+    enum SpeechEvent {
+        /// The heads-up at the warning lead: what the next phase asks for.
+        case prep(next: IntervalPhase, target: PhaseTarget)
+        /// A phase that began without a spoken heads-up (quiet transitions
+        /// and suspension catch-ups) announces itself.
+        case phaseStart(IntervalPhase, PhaseTarget)
+        case halfway
+        case suggestion(LiveCoach.Suggestion)
+    }
+
+    private func speak(_ event: SpeechEvent) {
+        guard spokenCuesOn, let line = speechLine?(event), !line.isEmpty else { return }
+        SpeechCoach.shared.speak(line)
+    }
+
+    // MARK: - Background mirror
+
+    /// Called on phase transitions, overtime, and coach-suggestion changes —
+    /// state the lock screen needs. SwiftUI onChange drives the Live Activity
+    /// while the app is foreground, but those handlers may not fire in the
+    /// background; this closure does.
+    var onLiveStateChange: (() -> Void)? = nil
+
+    private func notifyLiveState() {
+        onLiveStateChange?()
+    }
+
     // MARK: - Live coach
 
     var coachSuggestionsOffered: Int { liveCoach.offeredCount }
@@ -297,12 +353,14 @@ final class WorkoutEngine {
         }
         liveCoach.noteAccepted(suggestion)
         liveSuggestion = nil
+        notifyLiveState()
     }
 
     func dismissSuggestion() {
         guard let suggestion = liveSuggestion else { return }
         liveCoach.noteDismissed(suggestion)
         liveSuggestion = nil
+        notifyLiveState()
     }
 
     private func updateLiveSuggestion() {
@@ -313,6 +371,10 @@ final class WorkoutEngine {
         if isNew, hapticsOn {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
+        if isNew, let suggestion {
+            speak(.suggestion(suggestion))
+        }
+        notifyLiveState()
     }
 
     // MARK: - Control
@@ -323,8 +385,13 @@ final class WorkoutEngine {
         startDate = Date()
         phaseStart = Date()
         UIApplication.shared.isIdleTimerDisabled = true
-        if soundOn { TonePlayer.shared.prepare() }
+        // The audio session is the workout's background lifeline (audio
+        // background mode): keep it active even with sound cues off — it
+        // renders silence, and the timer, live HR, spoken cues, and the
+        // live coach keep working with the screen off.
+        TonePlayer.shared.prepare()
         cue(.phaseChange)
+        speak(.phaseStart(currentPhase, currentTarget))
         let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -376,16 +443,16 @@ final class WorkoutEngine {
         let remaining = currentPhase.seconds - phaseElapsed
 
         if remaining > 0 && !inOvertime {
-            let schedule = beepSchedule
-            // Hand each countdown tone to the audio clock just before its
-            // boundary so it plays exactly as the displayed second flips.
+            let marks = cueMarks
+            // Hand each cue tone to the audio clock just before its boundary
+            // so it plays exactly as the displayed second flips.
             if soundOn {
-                for mark in schedule where !scheduledBeeps.contains(mark) {
-                    let untilMark = remaining - Double(mark)
+                for (second, tone) in marks where !scheduledBeeps.contains(second) {
+                    let untilMark = remaining - Double(second)
                     if untilMark <= audioLookahead {
-                        scheduledBeeps.insert(mark)
-                        if !TonePlayer.shared.play(.low, after: max(0, untilMark)) {
-                            fallbackBeeps.insert(mark)
+                        scheduledBeeps.insert(second)
+                        if !TonePlayer.shared.play(tone, after: max(0, untilMark)) {
+                            fallbackBeeps.insert(second)
                         }
                     }
                 }
@@ -404,16 +471,32 @@ final class WorkoutEngine {
                 }
             }
             // Haptics (and the system-sound fallback) fire on the tick that
-            // crosses the mark — in step with the on-screen countdown.
+            // crosses the mark — in step with the on-screen countdown. The
+            // haptic matches the tone's meaning: heavy "reach for the
+            // machine", medium "halfway", light countdown ticks.
             let s = Int(remaining.rounded(.up))
-            if s != lastBeepSecond && schedule.contains(s) {
+            if s != lastBeepSecond, let mark = marks.first(where: { $0.second == s }) {
                 lastBeepSecond = s
                 if hapticsOn {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    switch mark.tone {
+                    case .prep: UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                    case .halfway: UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    default: UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }
                 }
                 if soundOn && fallbackBeeps.contains(s) {
                     fallbackBeeps.remove(s)
                     AudioServicesPlaySystemSound(1103)
+                }
+                switch mark.tone {
+                case .prep:
+                    if let next = nextPhase, let target = nextTarget {
+                        speak(.prep(next: next, target: target))
+                    }
+                case .halfway:
+                    speak(.halfway)
+                default:
+                    break
                 }
             }
         }
@@ -425,6 +508,7 @@ final class WorkoutEngine {
                 inOvertime = true
                 overtimeStart = Date().addingTimeInterval(remaining)
                 cue(.finish)
+                notifyLiveState()
             }
         }
         updateCoachMessage()
@@ -447,6 +531,7 @@ final class WorkoutEngine {
             inOvertime = true
             overtimeStart = Date()
             cue(.finish)
+            notifyLiveState()
             return
         }
         phaseIndex += 1
@@ -498,6 +583,7 @@ final class WorkoutEngine {
                 phaseStart = Date().addingTimeInterval(-(currentPhase.seconds + carry))
                 phaseElapsed = currentPhase.seconds + carry
                 cue(.finish)
+                notifyLiveState()
                 return
             }
             phaseIndex += 1
@@ -506,15 +592,22 @@ final class WorkoutEngine {
         phaseElapsed = carry
         if walkedPhases {
             // Catching up after a suspension: one neutral cue, not a replay
-            // of every skipped transition.
+            // of every skipped transition — then say where the plan landed.
             cue(.phaseChange)
+            speak(.phaseStart(currentPhase, currentTarget))
+            notifyLiveState()
             return
         }
         switch endCue {
         case .rampUp: cue(.go, skipSound: endToneAlreadyPlayed)
         case .effortDone: cue(.done, skipSound: endToneAlreadyPlayed)
-        case .none: cue(.phaseChange)
+        case .none:
+            cue(.phaseChange)
+            // No countdown preceded this transition, so nothing was spoken —
+            // announce the phase that just began.
+            speak(.phaseStart(currentPhase, currentTarget))
         }
+        notifyLiveState()
     }
 
     private func finish(early: Bool) {

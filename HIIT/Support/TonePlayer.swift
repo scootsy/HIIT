@@ -5,12 +5,30 @@ import AVFoundation
 /// exactly the state of a phone at the gym. So we render short sine tones
 /// ourselves and play them through a `.playback` session mixed over whatever
 /// else is playing.
+///
+/// The engine runs for the whole session (rendering silence between cues).
+/// Together with the `audio` background mode this is what keeps the workout
+/// alive — timer, heart rate, cues, and live coaching — while the screen is
+/// off or another app is up front.
 final class TonePlayer {
     static let shared = TonePlayer()
 
+    /// The cue vocabulary is semantic — every sound *shape* means one thing,
+    /// so the session is legible with eyes closed:
+    /// - a double-beep says "heads up, change coming — set the machine"
+    /// - single rising ticks (A5→B5→C#6) count 3-2-1
+    /// - the high E6 says GO, completing the rising arpeggio
+    /// - a low-high pair marks halfway through a long effort
     enum Tone {
-        /// Countdown tick — the "low beep" of the low-low-low-HIGH pattern.
+        /// Generic phase-change blip.
         case low
+        /// Heads-up double-beep at the warning lead — start adjusting.
+        case prep
+        /// The 3-2-1 countdown, rising in pitch so proximity is audible
+        /// without counting.
+        case count3, count2, count1
+        /// Halfway through a long work effort.
+        case halfway
         /// GO — the phase flipped to something harder.
         case high
         /// Effort finished — you made it, ease off now.
@@ -37,6 +55,11 @@ final class TonePlayer {
         try? session.setActive(true)
         if buffers.isEmpty {
             buffers[.low] = makeBuffer(notes: [(880, 0.12)])
+            buffers[.prep] = makeBuffer(notes: [(740, 0.09), (740, 0.09)])
+            buffers[.count3] = makeBuffer(notes: [(880, 0.12)])
+            buffers[.count2] = makeBuffer(notes: [(987.8, 0.12)])
+            buffers[.count1] = makeBuffer(notes: [(1108.7, 0.12)])
+            buffers[.halfway] = makeBuffer(notes: [(659.3, 0.09), (880, 0.12)])
             buffers[.high] = makeBuffer(notes: [(1318.5, 0.45)])
             buffers[.done] = makeBuffer(notes: [(1318.5, 0.14), (988.0, 0.22)])
             buffers[.fanfare] = makeBuffer(notes: [(880, 0.12), (1108.7, 0.12), (1318.5, 0.32)])

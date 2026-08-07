@@ -33,6 +33,14 @@ struct WorkoutActivityAttributes: ActivityAttributes {
         var adjustable: Bool
         /// Plan complete, clock counting up from phaseStart.
         var inOvertime: Bool
+        /// Live-coach suggestion, pre-formatted for the widget. nil = no chip.
+        /// The activity's staleDate carries the chip's expiry — a stale
+        /// activity hides it rather than showing a dead offer.
+        var suggestionMessage: String? = nil
+        /// "DROP TO 6.8 MPH · 2 EFFORTS LEFT"
+        var suggestionValue: String? = nil
+        /// Ease-off (down arrow, green) vs raise (up arrow, orange).
+        var suggestionEaseOff: Bool = true
     }
 
     var planName: String
@@ -101,6 +109,8 @@ enum WorkoutActivityStyle {
 enum WorkoutIntentBridge {
     static var adjust: ((_ up: Bool) -> Void)? = nil
     static var togglePause: (() -> Void)? = nil
+    static var acceptSuggestion: (() -> Void)? = nil
+    static var dismissSuggestion: (() -> Void)? = nil
 }
 
 /// "It said 5.0 but I'm running 5.5" — from the lock screen. Bumps speed by
@@ -136,6 +146,35 @@ struct ToggleWorkoutPauseIntent: LiveActivityIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         WorkoutIntentBridge.togglePause?()
+        return .result()
+    }
+}
+
+/// Apply the live coach's current suggestion from the lock screen — routes
+/// through the exact same override path as the in-app APPLY button.
+struct AcceptCoachSuggestionIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Apply coach suggestion"
+    static var isDiscoverable: Bool = false
+
+    init() {}
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        WorkoutIntentBridge.acceptSuggestion?()
+        return .result()
+    }
+}
+
+/// Clear the live coach's current suggestion from the lock screen.
+struct DismissCoachSuggestionIntent: LiveActivityIntent {
+    static var title: LocalizedStringResource = "Dismiss coach suggestion"
+    static var isDiscoverable: Bool = false
+
+    init() {}
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        WorkoutIntentBridge.dismissSuggestion?()
         return .result()
     }
 }
