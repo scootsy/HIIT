@@ -1,5 +1,6 @@
 import ActivityKit
 import Foundation
+import UIKit
 
 /// Owns the workout's Live Activity: starts it with the session, pushes a new
 /// content state at every phase boundary / pause / adjustment, and ends it
@@ -11,6 +12,9 @@ import Foundation
 final class WorkoutActivityController {
 
     private var activity: Activity<WorkoutActivityAttributes>? = nil
+    /// The last coach suggestion pushed to the activity — a *new* one while
+    /// the app is backgrounded gets an alerting update that lights the screen.
+    private var lastSuggestionID: UUID? = nil
 
     func start(engine: WorkoutEngine, settings: SettingsStore) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled, activity == nil else { return }
@@ -26,9 +30,21 @@ final class WorkoutActivityController {
 
     func update(engine: WorkoutEngine, settings: SettingsStore) {
         guard let activity else { return }
+        // While a suggestion is showing, its expiry is the activity's stale
+        // date: if the app dies before pushing the cleared state, the system
+        // marks the activity stale and the widget hides the dead offer.
         let content = ActivityContent(state: contentState(engine: engine, settings: settings),
-                                      staleDate: nil)
-        Task { await activity.update(content) }
+                                      staleDate: engine.liveSuggestion?.expiresAt)
+        let suggestion = engine.liveSuggestion
+        var alert: AlertConfiguration? = nil
+        if let suggestion, suggestion.id != lastSuggestionID,
+           UIApplication.shared.applicationState != .active {
+            alert = AlertConfiguration(title: "Coach",
+                                       body: "\(suggestion.message)",
+                                       sound: .default)
+        }
+        lastSuggestionID = suggestion?.id
+        Task { await activity.update(content, alertConfiguration: alert) }
     }
 
     func end() {
@@ -80,7 +96,12 @@ final class WorkoutActivityController {
             adjustable: engine.plan.equipment == .bike
                 ? engine.currentTarget.resistance != nil
                 : engine.currentTarget.speedMph != nil,
-            inOvertime: engine.inOvertime)
+            inOvertime: engine.inOvertime,
+            suggestionMessage: engine.liveSuggestion?.message,
+            suggestionValue: engine.liveSuggestion.map {
+                LiveCoach.valueText(for: $0, engine: engine, useMetric: settings.value.useMetric)
+            },
+            suggestionEaseOff: (engine.liveSuggestion?.steps ?? -1) < 0)
     }
 
     private func targetText(_ target: PhaseTarget, equipment: Equipment, settings: SettingsStore) -> String {

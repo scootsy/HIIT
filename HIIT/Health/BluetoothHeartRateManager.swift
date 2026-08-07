@@ -47,6 +47,13 @@ final class BluetoothHeartRateManager: NSObject {
     /// down a connection the live session is using.
     var workoutActive = false
 
+    /// Direct sample tap for the workout engine. SwiftUI's onChange can go
+    /// quiet while the app is backgrounded, but this closure fires from the
+    /// CoreBluetooth callback itself — with the bluetooth-central background
+    /// mode, it's what keeps live HR (and the live coach) working with the
+    /// screen off.
+    @ObservationIgnored var onSample: ((Double, Date) -> Void)? = nil
+
     var isConnected: Bool {
         if case .connected = status { return true }
         return false
@@ -311,7 +318,9 @@ extension BluetoothHeartRateManager: CBPeripheralDelegate {
             bpm = Int(bytes[1])
         }
         guard bpm > 20, bpm < 250 else { return }
+        let now = Date()
         latestHR = Double(bpm)
-        latestHRDate = Date()
+        latestHRDate = now
+        onSample?(Double(bpm), now)
     }
 }

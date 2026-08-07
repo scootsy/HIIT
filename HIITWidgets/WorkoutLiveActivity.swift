@@ -45,20 +45,49 @@ struct WorkoutLiveActivity: Widget {
                     .padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack(spacing: 10) {
-                        if let next = context.state.nextText {
-                            Text(next)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
+                    if let message = context.state.suggestionMessage {
+                        HStack(spacing: 8) {
+                            Image(systemName: context.state.suggestionEaseOff
+                                  ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                                .foregroundStyle(tint)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(message)
+                                    .font(.caption2.weight(.semibold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                if let value = context.state.suggestionValue {
+                                    Text(value)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                }
+                            }
+                            Spacer(minLength: 6)
+                            Button(intent: AcceptCoachSuggestionIntent()) {
+                                Text("Apply")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(tint)
                         }
-                        Spacer(minLength: 6)
-                        if context.state.adjustable && !context.state.inOvertime {
-                            adjustButtons(tint: tint)
+                        .padding(.horizontal, 4)
+                    } else {
+                        HStack(spacing: 10) {
+                            if let next = context.state.nextText {
+                                Text(next)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                            }
+                            Spacer(minLength: 6)
+                            if context.state.adjustable && !context.state.inOvertime {
+                                adjustButtons(tint: tint)
+                            }
                         }
+                        .padding(.horizontal, 4)
                     }
-                    .padding(.horizontal, 4)
                 }
             } compactLeading: {
                 Image(systemName: WorkoutActivityStyle.icon(forPhaseKind: context.state.phaseKindRaw))
@@ -135,6 +164,7 @@ struct WorkoutLiveActivity: Widget {
 
 private struct LockScreenWorkoutView: View {
     let context: ActivityViewContext<WorkoutActivityAttributes>
+    @Environment(\.isActivityStale) private var isStale
 
     private var state: WorkoutActivityAttributes.ContentState { context.state }
     private var tint: Color { WorkoutActivityStyle.tint(forPhaseKind: state.phaseKindRaw) }
@@ -181,6 +211,46 @@ private struct LockScreenWorkoutView: View {
                     .frame(maxWidth: 96, alignment: .trailing)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
+            }
+
+            // The live coach's offer — Apply routes through the same intent
+            // bridge as the +/- buttons. Hidden once the activity is stale
+            // (the offer expired without the app getting to push an update).
+            if let message = state.suggestionMessage, !isStale {
+                HStack(spacing: 8) {
+                    Image(systemName: state.suggestionEaseOff
+                          ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(tint)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(message)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                        if let value = state.suggestionValue {
+                            Text(value)
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+                    }
+                    Spacer(minLength: 6)
+                    Button(intent: AcceptCoachSuggestionIntent()) {
+                        Text("Apply")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(tint)
+                    Button(intent: DismissCoachSuggestionIntent()) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.gray)
+                }
+                .padding(.vertical, 2)
             }
 
             if !state.inOvertime {

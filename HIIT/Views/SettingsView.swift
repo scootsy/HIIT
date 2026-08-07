@@ -47,6 +47,7 @@ struct SettingsView: View {
                     }
                     Toggle("Sound cues", isOn: $store.value.soundOn)
                     Toggle("Haptic cues", isOn: $store.value.hapticsOn)
+                    Toggle("Spoken cues", isOn: $store.value.spokenCuesOn)
                 } header: {
                     Text("Training")
                 } footer: {

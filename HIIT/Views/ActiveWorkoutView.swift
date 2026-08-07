@@ -27,8 +27,26 @@ struct ActiveWorkoutContainerView: View {
         .onAppear {
             engine.soundOn = settings.value.soundOn
             engine.hapticsOn = settings.value.hapticsOn
+            engine.spokenCuesOn = settings.value.spokenCuesOn
             engine.maxHR = settings.maxHR
             engine.machine = settings.machine(for: engine.plan.equipment)
+            engine.speechLine = { [weak settings] event in
+                guard let settings else { return nil }
+                return SpeechScript.line(for: event, useMetric: settings.value.useMetric)
+            }
+            // Direct sample tap: SwiftUI onChange can go quiet in the
+            // background, but the BLE callback keeps firing (bluetooth-central
+            // background mode) — feed the engine straight from it.
+            ble.onSample = { [weak engine] bpm, date in
+                engine?.recordHeartRate(bpm, at: date, fromBLE: true)
+            }
+            // Same story for the lock screen: the engine calls this on phase
+            // transitions and coach-suggestion changes so the Live Activity
+            // stays current while the app is backgrounded.
+            engine.onLiveStateChange = { [weak engine, weak liveActivity, weak settings] in
+                guard let engine, let settings else { return }
+                liveActivity?.update(engine: engine, settings: settings)
+            }
             engine.start()
             ble.workoutActive = true
             if let idString = settings.value.hrMonitorID, let uuid = UUID(uuidString: idString) {
@@ -48,23 +66,30 @@ struct ActiveWorkoutContainerView: View {
                 engine.state == .paused ? engine.resume() : engine.pause()
                 liveActivity?.update(engine: engine, settings: settings)
             }
+            WorkoutIntentBridge.acceptSuggestion = { [weak engine, weak liveActivity, weak settings] in
+                guard let engine, let settings else { return }
+                engine.acceptSuggestion()
+                liveActivity?.update(engine: engine, settings: settings)
+            }
+            WorkoutIntentBridge.dismissSuggestion = { [weak engine, weak liveActivity, weak settings] in
+                guard let engine, let settings else { return }
+                engine.dismissSuggestion()
+                liveActivity?.update(engine: engine, settings: settings)
+            }
             liveActivity.start(engine: engine, settings: settings)
         }
         .onDisappear {
             ble.workoutActive = false
+            ble.onSample = nil
             ble.disconnect()
             health.stopHeartRateUpdates()
+            engine.onLiveStateChange = nil
             WorkoutIntentBridge.adjust = nil
             WorkoutIntentBridge.togglePause = nil
+            WorkoutIntentBridge.acceptSuggestion = nil
+            WorkoutIntentBridge.dismissSuggestion = nil
             liveActivity.end()
-        }
-        // Observe the timestamps, not the bpm values: a steady heart rate
-        // produces identical consecutive readings, and onChange never fires
-        // for an unchanged value — the engine's feed would silently stall.
-        .onChange(of: ble.latestHRDate) { _, newDate in
-            if let bpm = ble.latestHR, let date = newDate {
-                engine.recordHeartRate(bpm, at: date, fromBLE: true)
-            }
+            SpeechCoach.shared.stop()
         }
         .onChange(of: health.liveHeartRateDate) { _, newDate in
             if let bpm = health.liveHeartRate, let date = newDate, !ble.isConnected {
@@ -723,30 +748,8 @@ private struct WorkoutHRPanel: View {
                                 lineWidth: 1)))
     }
 
-    /// "DROP TO 6.8 MPH · 2 EFFORTS LEFT" — the projected value after the
-    /// same clamping adjustTarget will apply, in the user's units.
     private func suggestionValueText(_ suggestion: LiveCoach.Suggestion) -> String {
-        guard suggestion.anchorIndex < engine.appliedTargets.count else { return "" }
-        let verb = suggestion.steps < 0 ? "DROP TO" : "RAISE TO"
-        let target = engine.appliedTargets[suggestion.anchorIndex]
-        var value: String
-        if engine.plan.equipment == .bike, let resistance = target.resistance {
-            let projected = max(1, min(engine.machine.maxResistance, resistance + suggestion.steps))
-            value = "\(verb) R\(projected)"
-        } else if let speed = target.speedMph {
-            let raw = ((speed + 0.1 * Double(suggestion.steps)) * 10).rounded() / 10
-            let projected = max(0.5, min(engine.machine.maxSpeedMph, raw))
-            value = "\(verb) \(settings.speedString(projected).uppercased())"
-        } else {
-            return ""
-        }
-        if engine.plan.phases[suggestion.anchorIndex].kind == .work {
-            let remaining = engine.plan.phases.indices.filter {
-                $0 >= engine.phaseIndex && engine.plan.phases[$0].kind == .work
-            }.count
-            value += remaining == 1 ? " · LAST EFFORT" : " · \(remaining) EFFORTS LEFT"
-        }
-        return value
+        LiveCoach.valueText(for: suggestion, engine: engine, useMetric: settings.value.useMetric)
     }
 
     private var header: some View {
