@@ -171,7 +171,7 @@ struct SummaryView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if KeychainHelper.load()?.isEmpty == false {
+            if CoachService.isConfigured(settings.coachProvider) {
                 Button {
                     showCoach = true
                 } label: {
@@ -231,6 +231,7 @@ struct SummaryView: View {
 struct CoachSheetView: View {
     let summary: String
 
+    @Environment(SettingsStore.self) private var settings
     @Environment(\.dismiss) private var dismiss
     @State private var text: String? = nil
     @State private var errorMessage: String? = nil
@@ -282,13 +283,14 @@ struct CoachSheetView: View {
     }
 
     private func load() async {
-        guard let key = KeychainHelper.load(), !key.isEmpty else {
-            errorMessage = "Add your Anthropic API key in Settings → AI Coach first."
+        let provider = settings.coachProvider
+        guard let key = KeychainHelper.load(provider: provider), !key.isEmpty else {
+            errorMessage = "Add your \(provider.label) API key in Settings → AI Coach first."
             loading = false
             return
         }
         do {
-            text = try await CoachService.feedback(apiKey: key, summary: summary)
+            text = try await CoachService.feedback(provider: provider, apiKey: key, summary: summary)
         } catch {
             errorMessage = error.localizedDescription
         }

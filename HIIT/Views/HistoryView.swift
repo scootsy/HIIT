@@ -76,7 +76,7 @@ struct HistoryView: View {
                 SessionDetailView(session: session)
             }
             .toolbar {
-                if !sessions.isEmpty && KeychainHelper.load()?.isEmpty == false {
+                if !sessions.isEmpty && CoachService.isConfigured(settings.coachProvider) {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             coachSummary = CoachService.buildSummary(sessions: sessions, settings: settings)
@@ -360,7 +360,7 @@ struct SessionDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    if KeychainHelper.load()?.isEmpty == false {
+                    if CoachService.isConfigured(settings.coachProvider) {
                         Button {
                             coachSummary = CoachService.buildSummary(sessions: [session], settings: settings)
                             showCoach = true

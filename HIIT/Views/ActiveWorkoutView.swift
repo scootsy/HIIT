@@ -80,8 +80,8 @@ struct ActiveWorkoutContainerView: View {
 
 // MARK: - Live workout
 
-/// Layout: stats card → plan spine (expands into the effort editor during
-/// recoveries) → dual-arc ring → target card → heart-rate panel → controls.
+/// Layout: stats card → plan spine (tap it to open the effort editor) →
+/// dual-arc ring → target card → heart-rate panel → controls.
 /// The amber early warning tints only the ring, the spine's current segment
 /// and the target card — never the background. The whole stack lives in a
 /// scroll view sized to the screen: on roomy phones nothing moves and the
@@ -93,8 +93,8 @@ struct ActiveWorkoutView: View {
     @Environment(SettingsStore.self) private var settings
     @State private var showEndConfirm = false
     @State private var adjustingPhase: AdjustTargetRequest? = nil
-    /// nil = follow the phase (open during recoveries); true/false = user override.
-    @State private var editorOverride: Bool? = nil
+    /// Opens only on a spine tap; auto-closes when the phase changes.
+    @State private var editorOpen = false
 
     struct AdjustTargetRequest: Identifiable {
         let index: Int
@@ -116,10 +116,6 @@ struct ActiveWorkoutView: View {
     /// The background tint never switches to amber — it tracks the *phase*.
     private var backgroundColor: Color {
         engine.inOvertime ? Theme.recover : Theme.color(for: engine.currentPhase.kind)
-    }
-
-    private var editorOpen: Bool {
-        editorOverride ?? (engine.currentPhase.kind == .recover || engine.currentPhase.kind == .steady)
     }
 
     private var pastWorkIndices: [Int] {
@@ -145,6 +141,15 @@ struct ActiveWorkoutView: View {
                         ring.padding(.top, 14)
                         Spacer(minLength: 12)
                         targetCard
+                        if let hint = upNextHint {
+                            Text(hint)
+                                .font(Self.labelFont).tracking(1.7)
+                                .foregroundStyle(.white.opacity(0.38))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 8)
+                        }
                         Spacer(minLength: 12)
                         hrPanel
                         controls.padding(.top, 16)
@@ -159,7 +164,7 @@ struct ActiveWorkoutView: View {
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.25), value: editorOpen)
         .onChange(of: engine.phaseIndex) { _, _ in
-            editorOverride = nil
+            editorOpen = false
         }
         .confirmationDialog(engine.inOvertime ? "Finish and save?" : "End this workout?",
                             isPresented: $showEndConfirm, titleVisibility: .visible) {
@@ -224,7 +229,7 @@ struct ActiveWorkoutView: View {
         if engine.plan.equipment == .bike {
             return String(format: "%.0f", estimate.kcal)
         }
-        return String(format: "%.0f · %.1f", estimate.kcal, distance)
+        return String(format: "%.0f · %.2f", estimate.kcal, distance)
     }
 
     /// Calories and distance so far, from the targets actually being run.
@@ -286,7 +291,7 @@ struct ActiveWorkoutView: View {
                         .stroke(engine.isWarning ? Theme.warning.opacity(0.30) : Color.white.opacity(0.06),
                                 lineWidth: 1)))
             .contentShape(Rectangle())
-            .onTapGesture { editorOverride = !editorOpen }
+            .onTapGesture { editorOpen.toggle() }
 
             HStack {
                 Text(spineCaption)
@@ -310,7 +315,7 @@ struct ActiveWorkoutView: View {
         return "\(engine.plan.name.uppercased()) · \(engine.plan.minutes) MIN"
     }
 
-    // MARK: Effort editor (auto-opens during recoveries)
+    // MARK: Effort editor (opens on spine tap)
 
     private var effortEditor: some View {
         VStack(spacing: 0) {
@@ -494,6 +499,34 @@ struct ActiveWorkoutView: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
+    }
+
+    /// One quiet line under the target card: what's coming and at what
+    /// setting. The amber warning gives 10s to adjust the machine, but
+    /// knowing the numbers ahead of time is what makes the change easy —
+    /// this preps the user well before the countdown starts.
+    private var upNextHint: String? {
+        guard !engine.inOvertime, !engine.isWarning,
+              let next = engine.nextPhase, let target = engine.nextTarget else { return nil }
+        var parts = ["UP NEXT", "\(next.kind.title.uppercased()) \(clockString(next.seconds))"]
+        switch engine.plan.equipment {
+        case .bike:
+            if let resistance = target.resistance {
+                var value = "R\(resistance)"
+                if let cadence = target.cadenceRPM { value += " · \(cadence) RPM" }
+                parts.append(value)
+            }
+        case .treadmill, .outdoor:
+            if let speed = target.speedMph {
+                var value = String(format: "%.1f", settings.value.useMetric ? speed * 1.60934 : speed)
+                value += settings.value.useMetric ? " KM/H" : " MPH"
+                if let incline = target.inclinePercent, incline > 0.5 {
+                    value += String(format: " · %.0f%%", incline)
+                }
+                parts.append(value)
+            }
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var adjustable: Bool {

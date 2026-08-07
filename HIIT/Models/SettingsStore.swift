@@ -19,6 +19,7 @@ struct AppSettings: Codable {
     var hrMonitorID: String? = nil
     var hrMonitorName: String? = nil
     var experienceSetOnce: Bool? = nil
+    var coachProviderRaw: String = CoachProvider.anthropic.rawValue
 
     init() {}
 
@@ -44,6 +45,7 @@ struct AppSettings: Codable {
         hrMonitorID = try? c.decodeIfPresent(String.self, forKey: .hrMonitorID)
         hrMonitorName = try? c.decodeIfPresent(String.self, forKey: .hrMonitorName)
         experienceSetOnce = try? c.decodeIfPresent(Bool.self, forKey: .experienceSetOnce)
+        coachProviderRaw = (try? c.decodeIfPresent(String.self, forKey: .coachProviderRaw)) ?? CoachProvider.anthropic.rawValue
     }
 }
 
@@ -79,6 +81,11 @@ final class SettingsStore {
     var experience: ExperienceLevel {
         get { ExperienceLevel(rawValue: value.experienceRaw) ?? .beginner }
         set { value.experienceRaw = newValue.rawValue }
+    }
+
+    var coachProvider: CoachProvider {
+        get { CoachProvider(rawValue: value.coachProviderRaw) ?? .anthropic }
+        set { value.coachProviderRaw = newValue.rawValue }
     }
 
     /// Tanaka et al. (2001): HRmax = 208 − 0.7 × age. More accurate than 220 − age.

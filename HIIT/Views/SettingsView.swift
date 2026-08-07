@@ -8,7 +8,7 @@ struct SettingsView: View {
 
     @Environment(SettingsStore.self) private var settings
     @Environment(HealthKitManager.self) private var health
-    @State private var apiKey = KeychainHelper.load() ?? ""
+    @State private var apiKey = ""
     @State private var keySaveResult: Bool? = nil
     @State private var refreshing = false
     @State private var healthError: String? = nil
@@ -62,17 +62,25 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    SecureField("Anthropic API key (sk-ant-…)", text: $apiKey)
+                    Picker("Provider", selection: providerBinding) {
+                        ForEach(CoachProvider.allCases) { provider in
+                            Text(provider.label).tag(provider)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    SecureField(settings.coachProvider.keyPlaceholder, text: $apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Button(keySaveLabel) {
-                        keySaveResult = KeychainHelper.save(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                        keySaveResult = KeychainHelper.save(
+                            apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+                            provider: settings.coachProvider)
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { keySaveResult = nil }
                     }
                 } header: {
                     Text("AI Coach (optional)")
                 } footer: {
-                    Text("Key stays in the device Keychain, sent only to Anthropic. Coach requests include your profile numbers (age, weight, resting HR), experience level, recent session stats, and your workout notes. Get a key at console.anthropic.com.")
+                    Text("Each key stays in the device Keychain and is sent only to \(settings.coachProvider.label). Coach requests include your profile numbers (age, weight, resting HR), experience level, recent session stats, and your workout notes. Get a key at \(settings.coachProvider.consoleName).")
                 }
 
                 Section {
@@ -88,6 +96,9 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .onAppear {
+                apiKey = KeychainHelper.load(provider: settings.coachProvider) ?? ""
+            }
             .sheet(item: $editingField) { field in
                 profileEditor(for: field)
                     .presentationDetents([.height(320)])
@@ -272,6 +283,18 @@ struct SettingsView: View {
 
     private var experienceBinding: Binding<ExperienceLevel> {
         Binding(get: { settings.experience }, set: { settings.experience = $0 })
+    }
+
+    /// Switching provider swaps the visible key field to that provider's
+    /// stored key — each provider keeps its own Keychain entry.
+    private var providerBinding: Binding<CoachProvider> {
+        Binding(
+            get: { settings.coachProvider },
+            set: { provider in
+                settings.coachProvider = provider
+                apiKey = KeychainHelper.load(provider: provider) ?? ""
+                keySaveResult = nil
+            })
     }
 }
 
