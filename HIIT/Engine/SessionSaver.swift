@@ -126,7 +126,7 @@ enum SessionSaver {
         // Settings writes happen only after the durable save: the weekly-cap
         // anchor for this equipment, and — on a tier change — the same
         // rebasing the equipment levels just got, so the cap stays aligned.
-        if anchorNeedsWrite, let anchorDate {
+        if anchorNeedsWrite {
             settings.value.progressWeekAnchorDates[equipKey] = anchorDate
             settings.value.progressWeekAnchorLevels[equipKey] = anchorLevel
         }
