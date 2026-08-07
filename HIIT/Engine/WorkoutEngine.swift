@@ -416,9 +416,11 @@ final class WorkoutEngine {
             // heart-rate-recovery measurement (a well-studied fitness marker).
             recoveryAnchor = (Date(), hr)
         }
-        // Close out the long-recovery low-point measurement for the phase
-        // just left; the next long recovery starts fresh.
-        if leavingKind == .recover, let low = recoveryPhaseMinPct {
+        // Close out the long-recovery low-point measurement only if the
+        // phase ran to completion with the app live — a skipped or
+        // suspension-spanned recovery's partial window never saw the real
+        // low, so its measurement is discarded.
+        if auto, overshoot <= 5, leavingKind == .recover, let low = recoveryPhaseMinPct {
             recoveryMinPcts.append(low)
         }
         recoveryPhaseMinPct = nil

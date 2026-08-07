@@ -9,6 +9,7 @@ struct SettingsView: View {
     @Environment(SettingsStore.self) private var settings
     @Environment(HealthKitManager.self) private var health
     @State private var apiKey = ""
+    @State private var keyLoaded = false
     @State private var keySaveResult: Bool? = nil
     @State private var refreshing = false
     @State private var healthError: String? = nil
@@ -98,6 +99,10 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .onAppear {
+                // One-shot: onAppear re-fires on every tab switch and
+                // navigation pop, and must not clobber a typed-but-unsaved key.
+                guard !keyLoaded else { return }
+                keyLoaded = true
                 apiKey = KeychainHelper.load(provider: settings.coachProvider) ?? ""
             }
             .sheet(item: $editingField) { field in

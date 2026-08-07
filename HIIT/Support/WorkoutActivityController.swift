@@ -70,7 +70,9 @@ final class WorkoutActivityController {
             phaseStart: phaseStart,
             phaseEnd: phaseEnd,
             paused: paused,
-            pausedRemaining: engine.phaseRemaining,
+            // In overtime the countdown is exhausted — freeze the overtime
+            // elapsed instead (the widget checks paused before inOvertime).
+            pausedRemaining: engine.inOvertime ? engine.overtimeSeconds : engine.phaseRemaining,
             targetText: targetText(engine.currentTarget, equipment: engine.plan.equipment, settings: settings),
             nextText: nextText(engine: engine, settings: settings),
             effortsDone: engine.workEffortsDone,

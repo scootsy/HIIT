@@ -359,7 +359,10 @@ struct SetupView: View {
     /// Entering the suggestion step: the app picks the session length from
     /// training history and builds the plan before the screen appears.
     private func enterSuggestion() {
-        askExperience = settings.value.experienceSetOnce != true
+        // Latch, never reset: the first buildPlan() persists the experience
+        // answer, and a plain recompute here would hide the picker as soon
+        // as the user went Back and re-entered mid-visit.
+        if settings.value.experienceSetOnce != true { askExperience = true }
         if !askExperience {
             level = settings.experience
         }

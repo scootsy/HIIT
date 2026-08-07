@@ -50,6 +50,12 @@ enum SessionObjectives {
                 lines.append(Line(verdict: nil,
                                   title: doseText,
                                   detail: "An easy day on purpose — no intensity target today."))
+            } else if prescribedWork > 0, engine.workHRSeconds < 0.8 * prescribedWork {
+                // A strap dropout must not read as "under the zone": grade
+                // the dose only when HR actually covered most of the work.
+                lines.append(Line(verdict: nil,
+                                  title: doseText,
+                                  detail: "Heart rate was only measured for part of the session, so the intensity dose can't be graded today."))
             } else if prescribedWork > 0 {
                 // ~7–10 min in zone is the target for full-size sessions;
                 // shorter sessions are graded pro-rata at 60% of prescribed

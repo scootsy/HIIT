@@ -50,32 +50,50 @@ enum WorkoutGenerator {
         // of active warm-up; Helgerud warmed up ~10 min before the 4×4):
         // never below 3:00 — short sessions shrink the core, not the warm-up.
         // Sprint protocols get 90 extra seconds spent on two fast pickups.
-        let sprintPrep = requestedProtocol == .tenTwentyThirty || requestedProtocol == .surges
-        var warmupSecs: Double
-        if requestedProtocol == .norwegian {
-            warmupSecs = 480
-        } else if input.minutes <= 12 {
-            warmupSecs = 180
-        } else if input.minutes <= 20 {
-            warmupSecs = 240
-        } else {
-            warmupSecs = 300
-        }
-        if sprintPrep { warmupSecs += 90 }
         // Cool-downs depend on how the session ends: ≥3:00 after finishing
         // on a hard effort, 4:00 after the 4×4 or sprint-heavy work (ACSM:
         // light activity guards against post-exercise pooling). The very
         // shortest sessions keep 1:30 — an 8-minute budget can't fund more.
         // A Zone-2 steady finish keeps the original short cool-down below.
-        let cooldownMin: Double
-        if input.minutes <= 12 {
-            cooldownMin = 90
-        } else {
-            switch requestedProtocol {
-            case .norwegian, .tenTwentyThirty, .surges: cooldownMin = 240
-            default: cooldownMin = 180
+        func budget(for kind: ProtocolKind) -> (warmup: Double, cooldown: Double, sprintPrep: Bool) {
+            let sprintPrep = kind == .tenTwentyThirty || kind == .surges
+            var warmup: Double
+            if kind == .norwegian {
+                warmup = 480
+            } else if input.minutes <= 12 {
+                warmup = 180
+            } else if input.minutes <= 20 {
+                warmup = 240
+            } else {
+                warmup = 300
             }
+            if sprintPrep { warmup += 90 }
+            let cooldown: Double
+            if input.minutes <= 12 {
+                cooldown = 90
+            } else {
+                switch kind {
+                case .norwegian, .tenTwentyThirty, .surges: cooldown = 240
+                default: cooldown = 180
+                }
+            }
+            return (warmup, cooldown, sprintPrep)
         }
+
+        // A core builder can fall back to classic intervals when its own
+        // protocol doesn't fit the time budget — when that happens the
+        // warm-up and cool-down must follow the fallback too (no sprint
+        // pickups or sprint-sized cool-down on a classic session), so the
+        // budget is recomputed and the core rebuilt once. The fallback kind
+        // is always .classic, which cannot fall back again.
+        var (warmupSecs, cooldownMin, sprintPrep) = budget(for: requestedProtocol)
+        var coreResult = buildCore(requestedProtocol, core: max(120, total - warmupSecs - cooldownMin), input: input, kit: kit)
+        if coreResult.kind != requestedProtocol {
+            (warmupSecs, cooldownMin, sprintPrep) = budget(for: coreResult.kind)
+            coreResult = buildCore(coreResult.kind, core: max(120, total - warmupSecs - cooldownMin), input: input, kit: kit)
+        }
+        var corePhases = coreResult.phases
+        let protocolKind = coreResult.kind
 
         var phases: [IntervalPhase] = []
         let rampSecs = warmupSecs - (sprintPrep ? 90 : 0)
@@ -90,14 +108,6 @@ enum WorkoutGenerator {
             phases.append(IntervalPhase(kind: .warmup, seconds: 15, label: "Pickup", cue: "Once more — fast", target: pickup))
             phases.append(IntervalPhase(kind: .warmup, seconds: 30, label: "Warm up", cue: "Nearly there", target: kit.warm))
         }
-
-        let core = max(120, total - warmupSecs - cooldownMin)
-        // A core builder can fall back to classic intervals when its own
-        // protocol doesn't fit the time budget — name the plan after what
-        // was actually built, not what was requested.
-        let coreResult = buildCore(requestedProtocol, core: core, input: input, kit: kit)
-        var corePhases = coreResult.phases
-        let protocolKind = coreResult.kind
 
         // Spend any leftover time as an easy steady block, then cool down —
         // extra Zone-2 minutes are far more useful than a padded cooldown,
@@ -218,15 +228,36 @@ enum WorkoutGenerator {
             return options
         case .bike:
             if input.level == .beginner { return [.classic] }
-            var options: [ProtocolKind] = input.minutes >= 15 ? [.classic, .surges, .tenTwentyThirty, .pyramid] : [.classic, .surges]
+            var options: [ProtocolKind] = [.classic]
+            if sprintProtocolFits(.surges, minutes: input.minutes) { options.append(.surges) }
+            if input.minutes >= 15 {
+                if sprintProtocolFits(.tenTwentyThirty, minutes: input.minutes) { options.append(.tenTwentyThirty) }
+                options.append(.pyramid)
+            }
             if input.minutes >= 30 { options.append(.norwegian) }
             return options
         case .outdoor:
             if input.level == .beginner { return [.classic] }
-            var options: [ProtocolKind] = input.minutes >= 15 ? [.classic, .pyramid, .tenTwentyThirty] : [.classic, .pyramid]
+            var options: [ProtocolKind] = [.classic, .pyramid]
+            if input.minutes >= 15 && sprintProtocolFits(.tenTwentyThirty, minutes: input.minutes) {
+                options.append(.tenTwentyThirty)
+            }
             if input.minutes >= 30 { options.append(.norwegian) }
             return options
         }
+    }
+
+    /// Whether a sprint protocol's minimum core fits the session budget once
+    /// its (larger) warm-up and cool-down are funded — the candidate list
+    /// must match the same arithmetic makePlan uses, or the rotation would
+    /// advertise protocols that always silently fall back to classic.
+    private static func sprintProtocolFits(_ kind: ProtocolKind, minutes: Int) -> Bool {
+        var warmup: Double = minutes <= 12 ? 180 : (minutes <= 20 ? 240 : 300)
+        warmup += 90 // the sprint pickups
+        let cooldown: Double = minutes <= 12 ? 90 : 240
+        // 720 = two 10-20-30 blocks + the rest between; 300 = 4 surges + 3 recoveries.
+        let minCore: Double = kind == .tenTwentyThirty ? 720 : 300
+        return Double(minutes * 60) - warmup - cooldown >= minCore
     }
 
     /// Rotates protocols session-to-session so training stays varied, gated by
@@ -329,6 +360,9 @@ enum WorkoutGenerator {
         }
 
         easy = max(1.5, min(easy, input.machine.maxSpeedMph - 1))
+        // A slow machine can drag the advanced 5.0 jog into the gait band —
+        // a jog that can't be funded degrades to the brisk-walk recovery.
+        if easy >= 4.2 && easy < 4.8 { easy = 3.7 }
         work = max(easy + 0.8, min(work, input.machine.maxSpeedMph))
 
         var workIncline = 0.0
@@ -432,11 +466,20 @@ enum WorkoutGenerator {
             let walkBased = s.easy < 4.8
             var norwegianRestSpeed = walkBased ? max(s.easy + 0.8, round1(norwegianSpeed * 0.6)) : s.easy
             var norwegianRestIncline = 0.0
+            // When the push itself is clamped down to easy + 0.8 there is no
+            // room for a bumped-up recovery below it — plain easy pace then.
+            if norwegianRestSpeed >= norwegianSpeed { norwegianRestSpeed = s.easy }
+            // The bump must not land in the 4.2–4.7 gait band: cap at 4.0
+            // and carry the ~70% target with a touch of incline instead.
+            if walkBased && norwegianRestSpeed > 4.0 {
+                norwegianRestSpeed = 4.0
+                norwegianRestIncline = input.machine.hasIncline ? min(2, input.machine.maxInclinePercent) : 0
+            }
             if lowImpact || input.preferWalkRecoveries {
                 norwegianRestSpeed = min(norwegianRestSpeed, 3.7)
                 norwegianRestIncline = input.machine.hasIncline ? min(3, input.machine.maxInclinePercent) : 0
             }
-            let norwegianRestWords = norwegianRestSpeed >= 4.2 ? "Easy jog" : "Brisk walk"
+            let norwegianRestWords = norwegianRestSpeed >= 4.8 ? "Easy jog" : "Brisk walk"
             return TargetKit(
                 warm: treadTarget(speed: s.warm, incline: s.easyIncline, rpe: 2, words: "Very comfortable", hr: hrBand(for: .warmup, level: input.level)),
                 build: treadTarget(speed: round1((s.warm + s.work) / 2), incline: s.easyIncline, rpe: 4, words: "Getting warmer", hr: hrBand(for: .warmup, level: input.level)),
@@ -523,6 +566,12 @@ enum WorkoutGenerator {
         }
         var n = Int(((core + rec) / cycle).rounded(.down))
         n = max(3, min(n, cap))
+        // Fit guard: the forced 3-rep minimum can overrun the shortest cores.
+        // classicCore is the terminal fallback, so it can't fall back itself —
+        // shrink the recoveries (30s floor, 5s steps) to honor the budget.
+        if Double(n) * work + Double(n - 1) * rec > core {
+            rec = max(30, ((core - Double(n) * work) / Double(n - 1) / 5).rounded(.down) * 5)
+        }
 
         // The short advanced session is all-out sprints — its relief is a
         // near-passive slow walk (kit.sprintRest), not the usual active
