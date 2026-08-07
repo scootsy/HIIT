@@ -30,6 +30,9 @@ struct SummaryView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     statsGrid
+                    if let objectives = SessionObjectives.evaluate(engine: engine) {
+                        objectivesCard(objectives)
+                    }
                     if !saved {
                         RPEPicker(rpe: $rpe)
                         TextField("Notes (optional)", text: $notes, axis: .vertical)
@@ -110,6 +113,51 @@ struct SummaryView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+    }
+
+    /// "Did this session do its job?" — graded from live heart-rate data.
+    /// Appears only when a live HR source ran during the workout.
+    private func objectivesCard(_ lines: [SessionObjectives.Line]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Objectives")
+                .font(.headline)
+            ForEach(lines) { line in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: objectiveIcon(line.verdict))
+                        .foregroundStyle(objectiveColor(line.verdict))
+                        .font(.body)
+                        .padding(.top, 1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(line.title)
+                            .font(.subheadline.weight(.semibold))
+                        Text(line.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func objectiveIcon(_ verdict: SessionObjectives.Verdict?) -> String {
+        switch verdict {
+        case .met: return "checkmark.circle.fill"
+        case .partial: return "circle.bottomhalf.filled"
+        case .missed: return "arrow.down.circle"
+        case nil: return "info.circle"
+        }
+    }
+
+    private func objectiveColor(_ verdict: SessionObjectives.Verdict?) -> Color {
+        switch verdict {
+        case .met: return Theme.recover
+        case .partial: return Theme.steady
+        case .missed: return Theme.accent
+        case nil: return .secondary
         }
     }
 

@@ -88,6 +88,24 @@ final class WorkoutEngine {
     private var recoveryAnchor: (time: Date, hr: Double)? = nil
     private var storedHRSamples: [HRSample] = []
 
+    // MARK: Objective tracking (feeds the post-session "did this session
+    // meet its targets?" analysis; all zero/empty without a live HR source)
+
+    /// Work-phase seconds with HR data, and the share of them at/above the
+    /// phase's target band floor.
+    private(set) var workHRSeconds: Double = 0
+    private(set) var workHRSecondsAtIntensity: Double = 0
+    /// Whole-session seconds at ≥85% / ≥90% of max HR — the canonical
+    /// "high-intensity dose" HIIT is programmed around.
+    private(set) var sessionSecondsAt85: Double = 0
+    private(set) var sessionSecondsAt90: Double = 0
+    /// HR drop achieved within each completed recovery phase (anchor at
+    /// entry minus the lowest reading before the next effort).
+    private(set) var recoveryDrops: [Double] = []
+    private var lastDoseSampleDate: Date? = nil
+    private var recoveryPhaseAnchorHR: Double? = nil
+    private var recoveryPhaseMinHR: Double? = nil
+
     init(plan: WorkoutPlan) {
         self.plan = plan
         self.machine = .defaults(for: plan.equipment)
@@ -384,6 +402,18 @@ final class WorkoutEngine {
             // heart-rate-recovery measurement (a well-studied fitness marker).
             recoveryAnchor = (Date(), hr)
         }
+        // Per-recovery drop: close out the recovery just left, then anchor
+        // the one being entered (fresh HR only — a stale reading would
+        // measure the gap, not the recovery).
+        if leavingKind == .recover {
+            closeRecoveryDrop(recoverySeconds: actualSeconds[phaseIndex - 1])
+        }
+        if currentPhase.kind == .recover,
+           let hr = latestHR, let hrDate = latestHRDate,
+           Date().timeIntervalSince(hrDate) < 15 {
+            recoveryPhaseAnchorHR = hr
+            recoveryPhaseMinHR = nil
+        }
         // If the app was suspended (screen locked, another app foregrounded)
         // the timer stopped firing and the overshoot can span whole phases.
         // Walk the wall-clock gap through the plan so no time is lost: each
@@ -402,6 +432,10 @@ final class WorkoutEngine {
             carry -= currentPhase.seconds
             walkedPhases = true
             recoveryAnchor = nil
+            // No HR arrived while suspended — a drop measured across the
+            // gap would be meaningless.
+            recoveryPhaseAnchorHR = nil
+            recoveryPhaseMinHR = nil
             if phaseIndex + 1 >= plan.phases.count {
                 // The gap ran past the end of the plan — straight to overtime,
                 // with the leftover carry counted as overtime seconds.
@@ -427,6 +461,20 @@ final class WorkoutEngine {
         case .effortDone: cue(.done, skipSound: endToneAlreadyPlayed)
         case .none: cue(.phaseChange)
         }
+    }
+
+    /// Records how far HR fell during a completed recovery phase. Recoveries
+    /// under 30s are skipped — HR barely responds in that window, so a
+    /// "drop" would be noise.
+    private func closeRecoveryDrop(recoverySeconds: Double) {
+        defer {
+            recoveryPhaseAnchorHR = nil
+            recoveryPhaseMinHR = nil
+        }
+        guard recoverySeconds >= 30,
+              let anchor = recoveryPhaseAnchorHR, let low = recoveryPhaseMinHR else { return }
+        let drop = anchor - low
+        if drop > 0 { recoveryDrops.append(drop) }
     }
 
     private func finish(early: Bool) {
@@ -478,6 +526,27 @@ final class WorkoutEngine {
         if currentPhase.kind == .work {
             workHRSum += bpm
             workHRCount += 1
+        }
+        // Time-weighted zone accounting: each sample carries the seconds
+        // since the previous one (capped so a gap after suspension doesn't
+        // credit minutes of unmeasured time to one reading).
+        let dt = min(6, lastDoseSampleDate.map { max(0, date.timeIntervalSince($0)) } ?? 0)
+        lastDoseSampleDate = date
+        if let maxHR, maxHR > 0, dt > 0 {
+            let pct = bpm / maxHR * 100
+            if pct >= 85 { sessionSecondsAt85 += dt }
+            if pct >= 90 { sessionSecondsAt90 += dt }
+            if currentPhase.kind == .work {
+                workHRSeconds += dt
+                // A couple of points of tolerance below the band floor still
+                // counts — bands are estimates built on an estimated max HR.
+                if let lo = currentTarget.hrPercentLow, pct >= lo - 2 {
+                    workHRSecondsAtIntensity += dt
+                }
+            }
+        }
+        if currentPhase.kind == .recover, recoveryPhaseAnchorHR != nil {
+            recoveryPhaseMinHR = min(recoveryPhaseMinHR ?? bpm, bpm)
         }
         if let anchor = recoveryAnchor {
             let dt = date.timeIntervalSince(anchor.time)
