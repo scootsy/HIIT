@@ -10,6 +10,7 @@ struct ActiveWorkoutContainerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var engine: WorkoutEngine
+    @State private var liveActivity = WorkoutActivityController()
 
     init(plan: WorkoutPlan) {
         _engine = State(initialValue: WorkoutEngine(plan: plan))
@@ -34,11 +35,28 @@ struct ActiveWorkoutContainerView: View {
                 ble.connectToSaved(id: uuid, name: settings.value.hrMonitorName ?? "your monitor")
             }
             health.startHeartRateUpdates()
+            // Lock-screen intents run in this process while the app is
+            // backgrounded, so the handlers update the Live Activity
+            // directly — SwiftUI onChange may not fire back there.
+            WorkoutIntentBridge.adjust = { [weak engine, weak liveActivity, weak settings] up in
+                guard let engine, let settings else { return }
+                engine.adjustCurrentTarget(up: up)
+                liveActivity?.update(engine: engine, settings: settings)
+            }
+            WorkoutIntentBridge.togglePause = { [weak engine, weak liveActivity, weak settings] in
+                guard let engine, let settings else { return }
+                engine.state == .paused ? engine.resume() : engine.pause()
+                liveActivity?.update(engine: engine, settings: settings)
+            }
+            liveActivity.start(engine: engine, settings: settings)
         }
         .onDisappear {
             ble.workoutActive = false
             ble.disconnect()
             health.stopHeartRateUpdates()
+            WorkoutIntentBridge.adjust = nil
+            WorkoutIntentBridge.togglePause = nil
+            liveActivity.end()
         }
         // Observe the timestamps, not the bpm values: a steady heart rate
         // produces identical consecutive readings, and onChange never fires
@@ -58,11 +76,24 @@ struct ActiveWorkoutContainerView: View {
         // before the user taps Save can be recovered on next launch.
         .onChange(of: engine.phaseIndex) { _, _ in
             WorkoutCheckpoint.save(engine.makeCheckpoint())
+            liveActivity.update(engine: engine, settings: settings)
         }
         .onChange(of: engine.state) { _, newState in
             if newState == .finished {
                 WorkoutCheckpoint.save(engine.makeCheckpoint())
+                liveActivity.end()
+            } else {
+                // Pause/resume: swap the live countdown for a frozen one.
+                liveActivity.update(engine: engine, settings: settings)
             }
+        }
+        // In-app steppers and the past-effort editor retarget later phases —
+        // keep the lock screen's numbers in step.
+        .onChange(of: engine.appliedTargets) { _, _ in
+            liveActivity.update(engine: engine, settings: settings)
+        }
+        .onChange(of: engine.inOvertime) { _, _ in
+            liveActivity.update(engine: engine, settings: settings)
         }
         .onChange(of: scenePhase) { _, newPhase in
             // Only while the session is live. Once it finishes, the checkpoint
