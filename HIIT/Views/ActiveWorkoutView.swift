@@ -651,6 +651,7 @@ struct ActiveWorkoutView: View {
 private struct WorkoutHRPanel: View {
     let engine: WorkoutEngine
     @Environment(BluetoothHeartRateManager.self) private var ble
+    @Environment(SettingsStore.self) private var settings
 
     private static let labelFont = Font.system(size: 9.5, weight: .semibold)
 
@@ -660,18 +661,92 @@ private struct WorkoutHRPanel: View {
         TimelineView(.periodic(from: .now, by: 5)) { _ in
             VStack(alignment: .leading, spacing: 11) {
                 header
-                if !engine.coachMessage.isEmpty {
+                if let suggestion = engine.liveSuggestion {
+                    suggestionChip(suggestion)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else if !engine.coachMessage.isEmpty {
                     Text(engine.coachMessage)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.7))
                 }
                 chart
             }
+            .animation(.easeInOut(duration: 0.25), value: engine.liveSuggestion?.id)
             .padding(.horizontal, 15)
             .padding(.top, 13)
             .padding(.bottom, 10)
             .background(workoutSurface(tint: .white.opacity(0.055)))
         }
+    }
+
+    /// The live coach's one-tap offer: accept applies it through the same
+    /// override path as the manual steppers; the x just clears it.
+    private func suggestionChip(_ suggestion: LiveCoach.Suggestion) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: suggestion.steps < 0 ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(suggestion.steps < 0 ? Theme.recover : Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(suggestion.message)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(suggestionValueText(suggestion))
+                    .font(Self.labelFont).tracking(1.4)
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            Spacer(minLength: 8)
+            Button { engine.acceptSuggestion() } label: {
+                Text("APPLY")
+                    .font(Self.labelFont).tracking(1.7)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Theme.accent.opacity(0.9), in: Capsule())
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            Button { engine.dismissSuggestion() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 26, height: 26)
+                    .background(.white.opacity(0.08), in: Circle())
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke((suggestion.steps < 0 ? Theme.recover : Theme.accent).opacity(0.35),
+                                lineWidth: 1)))
+    }
+
+    /// "DROP TO 6.8 MPH · 2 EFFORTS LEFT" — the projected value after the
+    /// same clamping adjustTarget will apply, in the user's units.
+    private func suggestionValueText(_ suggestion: LiveCoach.Suggestion) -> String {
+        guard suggestion.anchorIndex < engine.appliedTargets.count else { return "" }
+        let verb = suggestion.steps < 0 ? "DROP TO" : "RAISE TO"
+        let target = engine.appliedTargets[suggestion.anchorIndex]
+        var value: String
+        if engine.plan.equipment == .bike, let resistance = target.resistance {
+            let projected = max(1, min(engine.machine.maxResistance, resistance + suggestion.steps))
+            value = "\(verb) R\(projected)"
+        } else if let speed = target.speedMph {
+            let raw = ((speed + 0.1 * Double(suggestion.steps)) * 10).rounded() / 10
+            let projected = max(0.5, min(engine.machine.maxSpeedMph, raw))
+            value = "\(verb) \(settings.speedString(projected).uppercased())"
+        } else {
+            return ""
+        }
+        if engine.plan.phases[suggestion.anchorIndex].kind == .work {
+            let remaining = engine.plan.phases.indices.filter {
+                $0 >= engine.phaseIndex && engine.plan.phases[$0].kind == .work
+            }.count
+            value += remaining == 1 ? " · LAST EFFORT" : " · \(remaining) EFFORTS LEFT"
+        }
+        return value
     }
 
     private var header: some View {

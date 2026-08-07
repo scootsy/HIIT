@@ -47,6 +47,10 @@ final class WorkoutEngine {
     private(set) var latestHRDate: Date? = nil
     private(set) var maxObservedHR: Double? = nil
     private(set) var coachMessage: String = ""
+    /// The live coach's current one-tap offer, if any. Rule evaluation,
+    /// expiry, and cooldowns all live in LiveCoach; this is just the
+    /// observable surface the workout screen renders.
+    private(set) var liveSuggestion: LiveCoach.Suggestion? = nil
     private(set) var hrRecovery: Double? = nil
     /// Every reading from any source (~1 per 2s), for the live workout graph.
     private(set) var hrHistory: [HRSample] = []
@@ -85,6 +89,7 @@ final class WorkoutEngine {
     private var workHRSum = 0.0
     private var workHRCount = 0.0
     private var coachUpdatedAt = Date.distantPast
+    private let liveCoach = LiveCoach()
     private var recoveryAnchor: (time: Date, hr: Double)? = nil
     private var storedHRSamples: [HRSample] = []
 
@@ -250,7 +255,9 @@ final class WorkoutEngine {
     /// Also callable for a *completed* phase ("that sprint was actually 5.5"):
     /// corrects that phase's record and recalibrates every not-yet-run phase
     /// of the same kind. Other already-finished phases keep what they were.
-    func adjustTarget(phaseAt index: Int, up: Bool) {
+    /// `haptic: false` lets a multi-step programmatic apply give one combined
+    /// haptic instead of a burst.
+    func adjustTarget(phaseAt index: Int, up: Bool, haptic: Bool = true) {
         guard state == .running || state == .paused else { return }
         guard plan.phases.indices.contains(index) else { return }
         let kind = plan.phases[index].kind
@@ -266,7 +273,44 @@ final class WorkoutEngine {
                 appliedTargets[i].speedMph = max(0.5, min(machine.maxSpeedMph, adjusted))
             }
         }
+        if hapticsOn && haptic {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+    }
+
+    // MARK: - Live coach
+
+    var coachSuggestionsOffered: Int { liveCoach.offeredCount }
+    var coachSuggestionsAccepted: Int { liveCoach.acceptedCount }
+
+    /// Applies the visible suggestion through the same override path the
+    /// manual steppers use, so clamping, later-phase propagation, the lock
+    /// screen, and next-session progression credit all follow for free —
+    /// the tap is what makes the change a user statement.
+    func acceptSuggestion() {
+        guard let suggestion = liveSuggestion else { return }
+        for _ in 0..<abs(suggestion.steps) {
+            adjustTarget(phaseAt: suggestion.anchorIndex, up: suggestion.steps > 0, haptic: false)
+        }
         if hapticsOn {
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+        liveCoach.noteAccepted(suggestion)
+        liveSuggestion = nil
+    }
+
+    func dismissSuggestion() {
+        guard let suggestion = liveSuggestion else { return }
+        liveCoach.noteDismissed(suggestion)
+        liveSuggestion = nil
+    }
+
+    private func updateLiveSuggestion() {
+        let suggestion = liveCoach.evaluate(engine: self, now: Date())
+        guard suggestion != liveSuggestion else { return }
+        let isNew = suggestion != nil && suggestion?.id != liveSuggestion?.id
+        liveSuggestion = suggestion
+        if isNew, hapticsOn {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
     }
@@ -384,6 +428,7 @@ final class WorkoutEngine {
             }
         }
         updateCoachMessage()
+        updateLiveSuggestion()
     }
 
     private func advance(auto: Bool, overshoot: Double) {
@@ -530,21 +575,22 @@ final class WorkoutEngine {
         if let maxHR, maxHR > 0 {
             let pct = bpm / maxHR * 100
             if dt > 0 {
-                // Two points of tolerance under every floor — the bands sit
-                // on an *estimated* max HR (age formulas carry ~7–11 bpm of
+                // Tolerance under every floor — the bands sit on an
+                // *estimated* max HR (age formulas carry ~7–11 bpm of
                 // individual error).
-                if pct >= dosePctFloor - 2 { sessionSecondsAtFloor += dt }
+                let tolerance = SessionObjectives.bandTolerancePct
+                if pct >= dosePctFloor - tolerance { sessionSecondsAtFloor += dt }
                 if pct >= 90 { sessionSecondsAt90 += dt }
                 if currentPhase.kind == .work {
                     workHRSeconds += dt
-                    if let lo = currentTarget.hrPercentLow, pct >= lo - 2 {
+                    if let lo = currentTarget.hrPercentLow, pct >= lo - tolerance {
                         workHRSecondsAtIntensity += dt
                     }
                 }
             }
             if currentPhase.kind == .work, phaseIndex < workPhaseHadHR.count {
                 workPhaseHadHR[phaseIndex] = true
-                if let lo = currentTarget.hrPercentLow, pct >= lo - 2 {
+                if let lo = currentTarget.hrPercentLow, pct >= lo - SessionObjectives.bandTolerancePct {
                     workPhaseHitBand[phaseIndex] = true
                 }
             }
@@ -565,6 +611,9 @@ final class WorkoutEngine {
     }
 
     private func updateCoachMessage() {
+        // The suggestion chip replaces the message line while it's up — the
+        // two would otherwise say the same thing twice.
+        guard liveSuggestion == nil else { return }
         guard Date().timeIntervalSince(coachUpdatedAt) > 8 else { return }
         var message = ""
         if let maxHR, let hr = latestHR, let hrDate = latestHRDate,
