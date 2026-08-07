@@ -24,6 +24,9 @@ struct RootView: View {
             WelcomeView()
         }
         .onAppear {
+            // A crash or force-quit mid-workout can leave a Live Activity
+            // stranded on the lock screen; nothing can be running at launch.
+            WorkoutActivityController.endOrphaned()
             // On a true first launch there is no history to have lost, and the
             // welcome sheet owns the presentation slot — skip the warning.
             showStoreWarning = storeLoadFailed && hasOnboarded

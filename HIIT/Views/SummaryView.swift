@@ -30,6 +30,9 @@ struct SummaryView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     statsGrid
+                    if let objectives = SessionObjectives.evaluate(engine: engine) {
+                        objectivesCard(objectives)
+                    }
                     if !saved {
                         RPEPicker(rpe: $rpe)
                         TextField("Notes (optional)", text: $notes, axis: .vertical)
@@ -113,6 +116,51 @@ struct SummaryView: View {
         }
     }
 
+    /// "Did this session do its job?" — graded from live heart-rate data.
+    /// Appears only when a live HR source ran during the workout.
+    private func objectivesCard(_ lines: [SessionObjectives.Line]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Objectives")
+                .font(.headline)
+            ForEach(lines) { line in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: objectiveIcon(line.verdict))
+                        .foregroundStyle(objectiveColor(line.verdict))
+                        .font(.body)
+                        .padding(.top, 1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(line.title)
+                            .font(.subheadline.weight(.semibold))
+                        Text(line.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func objectiveIcon(_ verdict: SessionObjectives.Verdict?) -> String {
+        switch verdict {
+        case .met: return "checkmark.circle.fill"
+        case .partial: return "circle.bottomhalf.filled"
+        case .missed: return "arrow.down.circle"
+        case nil: return "info.circle"
+        }
+    }
+
+    private func objectiveColor(_ verdict: SessionObjectives.Verdict?) -> Color {
+        switch verdict {
+        case .met: return Theme.recover
+        case .partial: return Theme.steady
+        case .missed: return Theme.accent
+        case nil: return .secondary
+        }
+    }
+
     private var saveButtons: some View {
         VStack(spacing: 10) {
             Button {
@@ -171,7 +219,7 @@ struct SummaryView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if KeychainHelper.load()?.isEmpty == false {
+            if CoachService.isConfigured(settings.coachProvider) {
                 Button {
                     showCoach = true
                 } label: {
@@ -231,6 +279,7 @@ struct SummaryView: View {
 struct CoachSheetView: View {
     let summary: String
 
+    @Environment(SettingsStore.self) private var settings
     @Environment(\.dismiss) private var dismiss
     @State private var text: String? = nil
     @State private var errorMessage: String? = nil
@@ -282,13 +331,14 @@ struct CoachSheetView: View {
     }
 
     private func load() async {
-        guard let key = KeychainHelper.load(), !key.isEmpty else {
-            errorMessage = "Add your Anthropic API key in Settings → AI Coach first."
+        let provider = settings.coachProvider
+        guard let key = KeychainHelper.load(provider: provider), !key.isEmpty else {
+            errorMessage = "Add your \(provider.label) API key in Settings → AI Coach first."
             loading = false
             return
         }
         do {
-            text = try await CoachService.feedback(apiKey: key, summary: summary)
+            text = try await CoachService.feedback(provider: provider, apiKey: key, summary: summary)
         } catch {
             errorMessage = error.localizedDescription
         }

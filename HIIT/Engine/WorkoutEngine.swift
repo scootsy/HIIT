@@ -88,11 +88,43 @@ final class WorkoutEngine {
     private var recoveryAnchor: (time: Date, hr: Double)? = nil
     private var storedHRSamples: [HRSample] = []
 
+    // MARK: Objective tracking (feeds the post-session "did this session
+    // meet its targets?" analysis; all zero/empty without a live HR source)
+
+    /// Work-phase seconds with HR data, and the share of them at/above the
+    /// phase's target band floor.
+    private(set) var workHRSeconds: Double = 0
+    private(set) var workHRSecondsAtIntensity: Double = 0
+    /// Whole-session seconds at/above the plan's dose floor — the canonical
+    /// "time in the high-intensity zone" HIIT is programmed around — plus a
+    /// ≥90% track for the hardest protocols.
+    private(set) var sessionSecondsAtFloor: Double = 0
+    private(set) var sessionSecondsAt90: Double = 0
+    /// Per work phase: did any reading reach the phase's band (2-point
+    /// tolerance), and did any reading arrive at all? HR lags effort by
+    /// 20–50s, so "entered the band at some point" is the fair per-interval
+    /// test — an average would punish every interval's unavoidable ramp.
+    private(set) var workPhaseHitBand: [Bool]
+    private(set) var workPhaseHadHR: [Bool]
+    /// Lowest %HRmax observed inside each completed long (≥120s) recovery.
+    /// Short recoveries aren't measured: HR physiologically cannot fall
+    /// much in under two minutes, so grading them would fail normal sessions.
+    private(set) var recoveryMinPcts: [Double] = []
+    /// The %HRmax floor used for dose accounting: the plan's work-band
+    /// floor, capped at 85 so the 4×4's 90–95 band still credits its ramp.
+    let dosePctFloor: Double
+    private var recoveryPhaseMinPct: Double? = nil
+    private var lastDoseSampleDate: Date? = nil
+
     init(plan: WorkoutPlan) {
         self.plan = plan
         self.machine = .defaults(for: plan.equipment)
         self.actualSeconds = Array(repeating: 0, count: plan.phases.count)
         self.appliedTargets = plan.phases.map { $0.target }
+        self.workPhaseHitBand = Array(repeating: false, count: plan.phases.count)
+        self.workPhaseHadHR = Array(repeating: false, count: plan.phases.count)
+        let workFloors = plan.phases.filter { $0.kind == .work }.compactMap { $0.target.hrPercentLow }
+        self.dosePctFloor = min(85, workFloors.min() ?? 85)
     }
 
     // MARK: - Derived state
@@ -384,6 +416,14 @@ final class WorkoutEngine {
             // heart-rate-recovery measurement (a well-studied fitness marker).
             recoveryAnchor = (Date(), hr)
         }
+        // Close out the long-recovery low-point measurement only if the
+        // phase ran to completion with the app live — a skipped or
+        // suspension-spanned recovery's partial window never saw the real
+        // low, so its measurement is discarded.
+        if auto, overshoot <= 5, leavingKind == .recover, let low = recoveryPhaseMinPct {
+            recoveryMinPcts.append(low)
+        }
+        recoveryPhaseMinPct = nil
         // If the app was suspended (screen locked, another app foregrounded)
         // the timer stopped firing and the overshoot can span whole phases.
         // Walk the wall-clock gap through the plan so no time is lost: each
@@ -402,6 +442,9 @@ final class WorkoutEngine {
             carry -= currentPhase.seconds
             walkedPhases = true
             recoveryAnchor = nil
+            // No HR arrived while suspended — a low point measured across
+            // the gap would be meaningless.
+            recoveryPhaseMinPct = nil
             if phaseIndex + 1 >= plan.phases.count {
                 // The gap ran past the end of the plan — straight to overtime,
                 // with the leftover carry counted as overtime seconds.
@@ -479,6 +522,36 @@ final class WorkoutEngine {
             workHRSum += bpm
             workHRCount += 1
         }
+        // Time-weighted zone accounting: each sample carries the seconds
+        // since the previous one (capped so a gap after suspension doesn't
+        // credit minutes of unmeasured time to one reading).
+        let dt = min(6, lastDoseSampleDate.map { max(0, date.timeIntervalSince($0)) } ?? 0)
+        lastDoseSampleDate = date
+        if let maxHR, maxHR > 0 {
+            let pct = bpm / maxHR * 100
+            if dt > 0 {
+                // Two points of tolerance under every floor — the bands sit
+                // on an *estimated* max HR (age formulas carry ~7–11 bpm of
+                // individual error).
+                if pct >= dosePctFloor - 2 { sessionSecondsAtFloor += dt }
+                if pct >= 90 { sessionSecondsAt90 += dt }
+                if currentPhase.kind == .work {
+                    workHRSeconds += dt
+                    if let lo = currentTarget.hrPercentLow, pct >= lo - 2 {
+                        workHRSecondsAtIntensity += dt
+                    }
+                }
+            }
+            if currentPhase.kind == .work, phaseIndex < workPhaseHadHR.count {
+                workPhaseHadHR[phaseIndex] = true
+                if let lo = currentTarget.hrPercentLow, pct >= lo - 2 {
+                    workPhaseHitBand[phaseIndex] = true
+                }
+            }
+            if currentPhase.kind == .recover, currentPhase.seconds >= 120 {
+                recoveryPhaseMinPct = min(recoveryPhaseMinPct ?? pct, pct)
+            }
+        }
         if let anchor = recoveryAnchor {
             let dt = date.timeIntervalSince(anchor.time)
             if dt >= 55 && dt <= 80 {
@@ -501,7 +574,10 @@ final class WorkoutEngine {
             case .work:
                 if let hi = currentTarget.hrPercentHigh, pct > hi + 3 {
                     message = "Ease off a touch — heart rate is above target"
-                } else if let lo = currentTarget.hrPercentLow, pct < lo - 6, phaseElapsed > 20 {
+                } else if let lo = currentTarget.hrPercentLow, pct < lo - 6,
+                          phaseElapsed > (currentPhase.seconds >= 180 ? 90 : 20) {
+                    // Long efforts get a real ramp before any "push harder"
+                    // nudge — HR takes ~2 minutes to catch a 4-minute push.
                     message = "You've got headroom — push a little harder"
                 } else {
                     message = "Right in the zone — hold this"

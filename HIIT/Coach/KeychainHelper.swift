@@ -1,23 +1,29 @@
 import Foundation
 import Security
 
-/// Minimal Keychain wrapper for the (optional) Anthropic API key — the key
-/// never leaves the device except in requests the user explicitly triggers.
+/// Minimal Keychain wrapper for the (optional) AI-coach API keys — one entry
+/// per provider, and a key never leaves the device except in requests the
+/// user explicitly triggers. The account name is the provider's raw value,
+/// so keys saved before multi-provider support (account "anthropic") keep
+/// working unchanged.
 enum KeychainHelper {
     private static let service = "com.scootsy.HIIT.apikey"
-    private static let account = "anthropic"
+
+    private static func query(for provider: CoachProvider) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: provider.rawValue,
+        ]
+    }
 
     /// Returns false when the write failed, so the UI can say so instead of
     /// showing "Saved ✓" for a key that never landed. Updates in place rather
     /// than delete-then-add: the old version destroyed the existing key first,
     /// so a failed add left the user with no key at all.
     @discardableResult
-    static func save(_ value: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
+    static func save(_ value: String, provider: CoachProvider) -> Bool {
+        let query = query(for: provider)
         guard !value.isEmpty else {
             SecItemDelete(query as CFDictionary)
             return true
@@ -33,14 +39,10 @@ enum KeychainHelper {
         return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
     }
 
-    static func load() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
+    static func load(provider: CoachProvider) -> String? {
+        var query = query(for: provider)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data else { return nil }

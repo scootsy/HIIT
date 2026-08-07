@@ -47,8 +47,36 @@ enum SessionSaver {
             completionRatio: completion,
             avgWorkHRPercent: hrPercent,
             workOverrideLevels: result.workOverrideLevels)
-        let declined = update.newLevel < baseLevel
-        progress.level = update.newLevel
+
+        // Weekly progression cap: net +1 level (+0.2 mph work speed) per
+        // rolling 7 days, however comfortable the sessions felt. Uncapped
+        // compounding allowed ~+0.6 mph a week — the classic overuse-injury
+        // setup, and RPE can't catch it because comfort is the trigger.
+        // The anchor is a high-water mark (when the level last rose, and to
+        // what) whose +1 headroom refills continuously over 7 days — a
+        // tumbling window would allow +2 within hours across its boundary.
+        // Anchors live in settings so the SwiftData schema stays put; they
+        // are written only after the save commits (below).
+        let equipKey = result.plan.equipment.rawValue
+        var anchorDate = settings.value.progressWeekAnchorDates[equipKey]
+            ?? result.endDate.addingTimeInterval(-7 * 86400)
+        var anchorLevel = settings.value.progressWeekAnchorLevels[equipKey] ?? baseLevel
+        var anchorNeedsWrite = false
+        var cappedLevel = update.newLevel
+        var cappedNote: String? = nil
+        let refill = min(1, max(0, result.endDate.timeIntervalSince(anchorDate)) / (7 * 86400))
+        if cappedLevel > anchorLevel + refill {
+            cappedLevel = anchorLevel + refill
+            cappedNote = "Strong week — the targets hold here for a few days. Fitness likes the climb slow."
+        }
+        if cappedLevel > anchorLevel {
+            anchorDate = result.endDate
+            anchorLevel = cappedLevel
+            anchorNeedsWrite = true
+        }
+
+        let declined = cappedLevel < baseLevel
+        progress.level = cappedLevel
         progress.sessionsCompleted += 1
         progress.lastSessionDate = result.endDate
         if result.plan.vibe == .easy || result.plan.isDeload == true {
@@ -62,8 +90,9 @@ enum SessionSaver {
         // The settings write is deferred until the context saves: settings
         // live in UserDefaults, which stays durable even when the SwiftData
         // store doesn't.
-        var note = update.note
+        var note = cappedNote ?? update.note
         var newExperience: ExperienceLevel? = nil
+        var tierDelta: Double? = nil
         if let change = ProgressionEngine.tierChange(experience: settings.experience,
                                                     progressLevel: progress.level,
                                                     declined: declined) {
@@ -71,6 +100,7 @@ enum SessionSaver {
             let delta = progress.level >= ProgressionEngine.tierLevelSpan
                 ? -ProgressionEngine.tierLevelSpan
                 : ProgressionEngine.tierLevelSpan
+            tierDelta = delta
             let allProgress = (try? context.fetch(FetchDescriptor<EquipmentProgress>())) ?? []
             for entry in allProgress {
                 entry.level += delta
@@ -92,6 +122,18 @@ enum SessionSaver {
         }
         if let newExperience {
             settings.experience = newExperience
+        }
+        // Settings writes happen only after the durable save: the weekly-cap
+        // anchor for this equipment, and — on a tier change — the same
+        // rebasing the equipment levels just got, so the cap stays aligned.
+        if anchorNeedsWrite {
+            settings.value.progressWeekAnchorDates[equipKey] = anchorDate
+            settings.value.progressWeekAnchorLevels[equipKey] = anchorLevel
+        }
+        if let tierDelta {
+            for key in settings.value.progressWeekAnchorLevels.keys {
+                settings.value.progressWeekAnchorLevels[key] = (settings.value.progressWeekAnchorLevels[key] ?? 0) + tierDelta
+            }
         }
         WorkoutCheckpoint.clear()
         return Outcome(session: session, note: note)
