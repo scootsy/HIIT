@@ -142,14 +142,27 @@ final class LiveCoach {
     /// change), cooldowns, and rule arming; returns what should be visible.
     func evaluate(engine: WorkoutEngine, now: Date = Date()) -> Suggestion? {
         // The active chip's lifecycle runs at full tick rate so expiry and
-        // phase-boundary dismissal are prompt.
+        // phase-boundary re-anchoring are prompt.
         if let current = active {
-            if now >= current.expiresAt || engine.phaseIndex != activePhaseIndex {
+            if now >= current.expiresAt {
                 active = nil
                 lastChipEndedAt = now
                 return nil
             }
-            return current
+            if engine.phaseIndex != activePhaseIndex {
+                // A phase boundary used to dismiss the chip outright — which
+                // took an offer made in an effort's closing seconds off the
+                // screen just as the user got a hand free to act on it. The
+                // chip now lives out its normal lifetime as long as the
+                // suggestion still has something to change.
+                activePhaseIndex = engine.phaseIndex
+                active = reanchored(current, engine: engine)
+                if active == nil {
+                    lastChipEndedAt = now
+                    return nil
+                }
+            }
+            return active
         }
 
         // Rule evaluation itself only needs ~1 Hz.
@@ -275,6 +288,33 @@ final class LiveCoach {
         }
 
         return nil
+    }
+
+    /// The surviving form of an active suggestion after a phase boundary, or
+    /// nil when no legal change remains. An anchor that slipped into the past
+    /// hops to the next not-yet-run phase of the same kind, so accepting
+    /// after the flip can't rewrite a completed phase's record. The id is
+    /// kept: it's the same offer, so no new-chip haptic or speech fires.
+    private func reanchored(_ suggestion: Suggestion, engine: WorkoutEngine) -> Suggestion? {
+        var anchor = suggestion.anchorIndex
+        if anchor < engine.phaseIndex {
+            let kind = engine.plan.phases[anchor].kind
+            let next = (engine.phaseIndex..<engine.plan.phases.count).first {
+                engine.plan.phases[$0].kind == kind
+                    && (kind != .work || engine.plan.phases[$0].seconds >= SessionObjectives.minGradeableEffortSeconds)
+            }
+            guard let next else { return nil }
+            anchor = next
+        }
+        guard isLegal(steps: suggestion.steps, anchor: anchor, engine: engine) else { return nil }
+        guard anchor != suggestion.anchorIndex else { return suggestion }
+        return Suggestion(id: suggestion.id,
+                          trigger: suggestion.trigger,
+                          steps: suggestion.steps,
+                          anchorIndex: anchor,
+                          message: suggestion.message,
+                          createdAt: suggestion.createdAt,
+                          expiresAt: suggestion.expiresAt)
     }
 
     // MARK: - Offer construction
