@@ -41,16 +41,28 @@ enum SessionObjectives {
     static let hrrGoodBPM = 25.0
     static let hrrFlagBPM = 12.0
 
-    enum Verdict {
-        case met, partial, missed
+    /// Raw values are persisted inside WorkoutSession.objectivesData —
+    /// renaming a case would silently blank every stored session's grades.
+    enum Verdict: String, Codable {
+        case met = "met"
+        case partial = "partial"
+        case missed = "missed"
     }
 
-    struct Line: Identifiable {
-        let id = UUID()
+    /// Codable so the grades persist with the saved session — the history
+    /// detail replays the exact card the post-workout summary showed.
+    struct Line: Codable, Equatable {
         /// nil = informational only (e.g. an easy day has no intensity target).
         var verdict: Verdict?
         var title: String
         var detail: String
+
+        /// The JSON in objectivesData is a persistence contract: these keys
+        /// must stay stable even if the properties are renamed, or old
+        /// sessions' cards vanish (decode falls back to empty).
+        private enum CodingKeys: String, CodingKey {
+            case verdict, title, detail
+        }
     }
 
     static func evaluate(engine: WorkoutEngine) -> [Line]? {

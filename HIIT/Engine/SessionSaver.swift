@@ -19,11 +19,20 @@ enum SessionSaver {
     static func save(result: SessionResult,
                      rpe: Int?,
                      notes: String,
+                     objectives: [SessionObjectives.Line]? = nil,
+                     suspendedSeconds: Double = 0,
                      context: ModelContext,
                      settings: SettingsStore) -> Outcome {
         let session = WorkoutSession(result: result)
         session.rpe = rpe
         session.notes = notes
+        session.suspendedSeconds = suspendedSeconds
+        // The grades are computed from live engine state that dies with the
+        // session — store them so history can show the same summary. Nothing
+        // to store from checkpoint recovery (its HR bookkeeping is gone).
+        if let objectives, !objectives.isEmpty {
+            session.objectivesData = (try? JSONEncoder().encode(objectives)) ?? Data()
+        }
 
         let completion = result.plan.workPhaseCount > 0
             ? Double(result.completedWorkIntervals) / Double(result.plan.workPhaseCount)
@@ -119,6 +128,15 @@ enum SessionSaver {
             AppLog.save.error("session save failed: \(error.localizedDescription, privacy: .public)")
             context.rollback()
             return Outcome(session: nil, note: note)
+        }
+        // In the degraded launch mode (the store failed to open, HIITApp fell
+        // back to in-memory) the save above "succeeds" but evaporates at
+        // process exit. Stop before every durable side effect: UserDefaults
+        // progression state would skew against SwiftData writes that won't
+        // survive, and the on-disk checkpoint is the only copy of this
+        // workout a healthy next launch can still recover.
+        guard !context.container.configurations.contains(where: { $0.isStoredInMemoryOnly }) else {
+            return Outcome(session: session, note: note)
         }
         if let newExperience {
             settings.experience = newExperience

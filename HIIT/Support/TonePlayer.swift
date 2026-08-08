@@ -82,6 +82,28 @@ final class TonePlayer {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
+    /// Briefly parks the render loop so SpeechCoach can bounce the shared
+    /// session — iOS lifts a spoken-cue duck only on deactivation, and
+    /// deactivation fails while render I/O is running. Scheduled tones
+    /// survive the park; one landing inside the bounce plays a beat late.
+    func pauseEngine() {
+        guard active, engine.isRunning else { return }
+        engine.pause()
+    }
+
+    /// Returns false when the engine wouldn't restart so the caller can
+    /// retry the whole bounce — `active` stays true on purpose: this engine
+    /// is the background lifeline, and with it dead the tick that would
+    /// otherwise self-heal via play() may never fire again.
+    @discardableResult
+    func resumeEngine() -> Bool {
+        guard active else { return true }
+        if engine.isRunning { return true }
+        guard (try? engine.start()) != nil else { return false }
+        player.play()
+        return true
+    }
+
     /// Returns false when the tone couldn't be played so the caller can fall
     /// back to a system sound. A failed initial `prepare()` (e.g. a workout
     /// started during a phone call) is retried here, so cues recover as soon

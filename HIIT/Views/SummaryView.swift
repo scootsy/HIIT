@@ -32,7 +32,7 @@ struct SummaryView: View {
                     header
                     statsGrid
                     if let objectives = SessionObjectives.evaluate(engine: engine) {
-                        objectivesCard(objectives)
+                        ObjectivesCard(lines: objectives)
                     }
                     if !saved {
                         RPEPicker(rpe: $rpe)
@@ -87,79 +87,18 @@ struct SummaryView: View {
 
     private var statsGrid: some View {
         let r = result
-        return VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                StatTile(title: "Duration", value: clockString(r.totalSeconds), subtitle: "minutes")
-                StatTile(title: "Work time", value: clockString(r.workSeconds), subtitle: "in the red")
-                StatTile(title: "Intervals", value: "\(r.completedWorkIntervals)/\(r.plan.workPhaseCount)", subtitle: "completed")
-            }
-            HStack(spacing: 10) {
-                StatTile(title: "Energy", value: "\(Int(r.estimatedCalories))", subtitle: "kcal (est.)")
-                if r.plan.equipment == .bike {
-                    StatTile(title: "Avg HR", value: r.avgHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
-                } else {
-                    StatTile(title: "Distance", value: settings.distanceString(r.estimatedDistanceMeters), subtitle: "estimated")
-                }
-                StatTile(title: "Max HR", value: r.maxHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
-            }
-            if let recovery = r.hrRecovery {
-                StatTile(title: "HR recovery",
-                         value: "−\(Int(recovery)) bpm",
-                         subtitle: "1-min drop after a hard effort")
-            }
-            if engine.suspendedSeconds > 30 {
-                Label("Includes \(clockString(engine.suspendedSeconds)) while the app was in the background — cues and live heart rate pause when the screen is off or another app is up front.",
-                      systemImage: "moon.zzz")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    /// "Did this session do its job?" — graded from live heart-rate data.
-    /// Appears only when a live HR source ran during the workout.
-    private func objectivesCard(_ lines: [SessionObjectives.Line]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Objectives")
-                .font(.headline)
-            ForEach(lines) { line in
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: objectiveIcon(line.verdict))
-                        .foregroundStyle(objectiveColor(line.verdict))
-                        .font(.body)
-                        .padding(.top, 1)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(line.title)
-                            .font(.subheadline.weight(.semibold))
-                        Text(line.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private func objectiveIcon(_ verdict: SessionObjectives.Verdict?) -> String {
-        switch verdict {
-        case .met: return "checkmark.circle.fill"
-        case .partial: return "circle.bottomhalf.filled"
-        case .missed: return "arrow.down.circle"
-        case nil: return "info.circle"
-        }
-    }
-
-    private func objectiveColor(_ verdict: SessionObjectives.Verdict?) -> Color {
-        switch verdict {
-        case .met: return Theme.recover
-        case .partial: return Theme.steady
-        case .missed: return Theme.accent
-        case nil: return .secondary
-        }
+        return SessionStatsGrid(
+            equipment: r.plan.equipment,
+            totalSeconds: r.totalSeconds,
+            workSeconds: r.workSeconds,
+            completedIntervals: r.completedWorkIntervals,
+            totalIntervals: r.plan.workPhaseCount,
+            calories: r.estimatedCalories,
+            distanceMeters: r.estimatedDistanceMeters,
+            avgHeartRate: r.avgHeartRate,
+            maxHeartRate: r.maxHeartRate,
+            hrRecovery: r.hrRecovery,
+            suspendedSeconds: engine.suspendedSeconds)
     }
 
     private var saveButtons: some View {
@@ -295,7 +234,10 @@ struct SummaryView: View {
         guard !saved else { return }
 
         let r = result
+        let lines = SessionObjectives.evaluate(engine: engine)
         let outcome = SessionSaver.save(result: r, rpe: rpe, notes: notes,
+                                        objectives: lines,
+                                        suspendedSeconds: engine.suspendedSeconds,
                                         context: context, settings: settings)
         guard let session = outcome.session else {
             // Nothing was persisted and the checkpoint is still on disk —
@@ -310,11 +252,19 @@ struct SummaryView: View {
             + CoachService.buildSummary(sessions: [session], settings: settings)
         // The objective grades tell the coach *why* a session landed the way
         // it did — feedback gets dramatically more specific with them.
-        if let lines = SessionObjectives.evaluate(engine: engine) {
+        if let lines {
             coachSummary += "\nHow the session graded against its objectives:\n"
                 + lines.map { "- \($0.title). \($0.detail)" }.joined(separator: "\n")
         }
 
+        // In the degraded in-memory launch the checkpoint stays on disk (see
+        // SessionSaver) and the next healthy launch re-saves this workout —
+        // exporting to Health now too would duplicate it there. Skip quietly
+        // (.notAuthorized renders nothing); the recovery path exports instead.
+        guard !context.container.configurations.contains(where: { $0.isStoredInMemoryOnly }) else {
+            healthSaved = .notAuthorized
+            return
+        }
         Task { @MainActor in
             let ok = await health.saveWorkout(result: r)
             healthSaved = ok

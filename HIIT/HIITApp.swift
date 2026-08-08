@@ -16,7 +16,7 @@ struct HIITApp: App {
         // to an in-memory session with a visible warning instead of crashing
         // at launch — a crash loop here could only be fixed by deleting the
         // app, which destroys all workout history.
-        let schema = Schema(versionedSchema: HIITSchemaV1.self)
+        let schema = Schema(versionedSchema: HIITSchemaV2.self)
         do {
             container = try ModelContainer(
                 for: schema,

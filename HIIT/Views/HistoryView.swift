@@ -292,22 +292,25 @@ struct SessionDetailView: View {
                     }
                 }
 
-                VStack(spacing: 10) {
-                    HStack(spacing: 10) {
-                        StatTile(title: "Duration", value: clockString(session.totalSeconds), subtitle: "minutes")
-                        StatTile(title: "Intervals", value: "\(session.completedWorkIntervals)/\(session.totalWorkIntervals)", subtitle: "completed")
-                        StatTile(title: "Energy", value: "\(Int(session.estimatedCalories))", subtitle: "kcal (est.)")
-                    }
-                    HStack(spacing: 10) {
-                        StatTile(title: "Avg HR", value: session.avgHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
-                        StatTile(title: "Max HR", value: session.maxHeartRate.map { "\(Int($0))" } ?? "—", subtitle: "bpm")
-                        StatTile(title: "Effort", value: session.rpe.map { "\($0)/10" } ?? "—", subtitle: "your rating")
-                    }
-                    if let recovery = session.hrRecovery {
-                        StatTile(title: "HR recovery",
-                                 value: "−\(Int(recovery)) bpm",
-                                 subtitle: "1-min drop after a hard effort")
-                    }
+                // The same grid and objectives card the post-workout summary
+                // shows — a session must read identically in both places.
+                SessionStatsGrid(
+                    equipment: session.equipment,
+                    totalSeconds: session.totalSeconds,
+                    workSeconds: session.workSeconds,
+                    completedIntervals: session.completedWorkIntervals,
+                    totalIntervals: session.totalWorkIntervals,
+                    calories: session.estimatedCalories,
+                    distanceMeters: session.estimatedDistanceMeters,
+                    avgHeartRate: session.avgHeartRate,
+                    maxHeartRate: session.maxHeartRate,
+                    hrRecovery: session.hrRecovery,
+                    suspendedSeconds: session.suspendedSeconds,
+                    historyExtras: true,
+                    rpe: session.rpe)
+
+                if !session.objectives.isEmpty {
+                    ObjectivesCard(lines: session.objectives)
                 }
 
                 if !session.nextTimeNote.isEmpty {
@@ -363,6 +366,13 @@ struct SessionDetailView: View {
                     if CoachService.isConfigured(settings.coachProvider) {
                         Button {
                             coachSummary = CoachService.buildSummary(sessions: [session], settings: settings)
+                            // Same context the post-workout coach gets: the
+                            // stored grades say *why* the session landed as
+                            // it did.
+                            if !session.objectives.isEmpty {
+                                coachSummary += "\nHow the session graded against its objectives:\n"
+                                    + session.objectives.map { "- \($0.title). \($0.detail)" }.joined(separator: "\n")
+                            }
                             showCoach = true
                         } label: {
                             Label("Ask the AI coach", systemImage: "sparkles")
