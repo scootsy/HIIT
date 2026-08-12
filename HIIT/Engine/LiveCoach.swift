@@ -18,6 +18,8 @@ final class LiveCoach {
             case overBand
             /// Consecutive completed efforts never reached the band.
             case underBandEfforts
+            /// A long endurance block stayed below its aerobic band.
+            case underBandSteady
             /// Long recoveries aren't bringing heart rate down.
             case insufficientRecovery
             /// 1-minute heart-rate recovery under the clinical flag.
@@ -52,6 +54,16 @@ final class LiveCoach {
         static let overBandResetPct = 1.0
         /// HR lags effort by 20–50s — never judge a work phase's early ramp.
         static let overBandMinPhaseElapsed = 45.0
+        /// Steady cardio gets a long settling window; only then can sustained
+        /// low HR justify one small increase.
+        static let steadySettleSeconds = 120.0
+        static let underBandSustainSeconds = 45.0
+        static let underBandTriggerPct = 3.0
+        /// Once-per-phase gating fits interval efforts, but a 30–50 minute
+        /// endurance block is a single phase — inside steady phases a rule
+        /// may fire again after this much quiet time (each re-offer needs a
+        /// fresh sustain window, and the session step budget still applies).
+        static let steadyRearmSeconds = 300.0
         /// Chip lifetime before it quietly expires.
         static let displaySeconds = 20.0
         /// Minimum quiet time between any two chips.
@@ -82,6 +94,9 @@ final class LiveCoach {
     private var overBandHardSeconds = 0.0
     private var overBandPhaseIndex = -1
     private var overBandFiredPhase = -1
+    private var overBandLastFiredAt = Date.distantPast
+    private var underSteadySeconds = 0.0
+    private var underSteadyLastFiredAt = Date.distantPast
     /// Completed-gradeable-effort count already consumed by a raise offer.
     private var underBandWatermark = 0
     /// recoveryMinPcts entries already consumed by a recovery offer.
@@ -205,6 +220,18 @@ final class LiveCoach {
                 overBandSeconds = 0
                 overBandHardSeconds = 0
             }
+            // Endurance sessions only: an interval plan's Zone-2 steady
+            // finisher is meant to be easy, not chased up into its band
+            // (same philosophy as the passive coach message).
+            if engine.plan.effectiveMode == .endurance,
+               engine.currentPhase.kind == .steady,
+               let lo = engine.currentTarget.hrPercentLow,
+               engine.phaseElapsed >= Rules.steadySettleSeconds,
+               pct < lo - Rules.underBandTriggerPct {
+                underSteadySeconds += dt
+            } else if engine.currentPhase.kind != .steady || pct >= (engine.currentTarget.hrPercentLow ?? 0) - 1 {
+                underSteadySeconds = 0
+            }
         }
 
         // Global gates for offering anything new.
@@ -222,8 +249,14 @@ final class LiveCoach {
         let easyDay = engine.plan.vibe == .easy || engine.plan.isDeload == true
 
         // R1 — sustained over-band (safety first; allowed on easy days).
+        // Inside a long steady block cardiac drift makes over-band creep the
+        // expected trajectory, so there the rule re-arms after quiet time
+        // instead of firing once per (30–50 minute) phase.
+        let overBandArmed = overBandFiredPhase != engine.phaseIndex
+            || (engine.currentPhase.kind == .steady
+                && now.timeIntervalSince(overBandLastFiredAt) >= Rules.steadyRearmSeconds)
         if engine.currentPhase.kind == .work || engine.currentPhase.kind == .steady,
-           overBandFiredPhase != engine.phaseIndex,
+           overBandArmed,
            overBandSeconds >= Rules.overBandSustainSeconds,
            engine.phaseElapsed >= Rules.overBandMinPhaseElapsed {
             let isWork = engine.currentPhase.kind == .work
@@ -239,8 +272,29 @@ final class LiveCoach {
             if let s = offer(.overBand, steps: hard ? -2 : -1, anchor: engine.phaseIndex,
                              message: message, engine: engine, now: now) {
                 overBandFiredPhase = engine.phaseIndex
+                overBandLastFiredAt = now
+                overBandSeconds = 0
+                overBandHardSeconds = 0
                 return s
             }
+        }
+
+        // Sustained endurance work is slow to settle. After two minutes plus
+        // 45 seconds genuinely below the band, offer one small change and let
+        // the user confirm it on the physical machine. Re-arms after quiet
+        // time (fresh sustain required) so one +0.1 step isn't the whole
+        // session's ceiling; the accumulator above only runs for endurance
+        // sessions, so interval plans never see this rule.
+        if engine.currentPhase.kind == .steady,
+           !acceptedEaseOff,
+           now.timeIntervalSince(underSteadyLastFiredAt) >= Rules.steadyRearmSeconds,
+           underSteadySeconds >= Rules.underBandSustainSeconds,
+           let s = offer(.underBandSteady, steps: 1, anchor: engine.phaseIndex,
+                         message: "Still below your endurance range — raise it one small step",
+                         engine: engine, now: now) {
+            underSteadyLastFiredAt = now
+            underSteadySeconds = 0
+            return s
         }
 
         // R2 — 1-minute heart-rate recovery under the clinical flag. Only

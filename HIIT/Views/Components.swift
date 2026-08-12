@@ -54,8 +54,12 @@ struct SessionStatsGrid: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 StatTile(title: "Duration", value: clockString(totalSeconds), subtitle: "minutes")
-                StatTile(title: "Work time", value: clockString(workSeconds), subtitle: "in the red")
-                StatTile(title: "Intervals", value: "\(completedIntervals)/\(totalIntervals)", subtitle: "completed")
+                if totalIntervals == 0 {
+                    StatTile(title: "Endurance", value: clockString(workSeconds), subtitle: "coached time")
+                } else {
+                    StatTile(title: "Work time", value: clockString(workSeconds), subtitle: "in the red")
+                    StatTile(title: "Intervals", value: "\(completedIntervals)/\(totalIntervals)", subtitle: "completed")
+                }
             }
             HStack(spacing: 10) {
                 StatTile(title: "Energy", value: "\(Int(calories))", subtitle: "kcal (est.)")

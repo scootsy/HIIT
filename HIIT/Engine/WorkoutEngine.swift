@@ -852,8 +852,10 @@ final class WorkoutEngine {
         for (i, phase) in plan.phases.enumerated() {
             let actual = records[i].actualSeconds
             total += actual
-            if phase.kind == .work {
+            if phase.kind == .work || (plan.effectiveMode == .endurance && phase.kind == .steady) {
                 workSecs += actual
+            }
+            if phase.kind == .work {
                 if actual >= phase.seconds * 0.9 { completedWork += 1 }
             }
         }

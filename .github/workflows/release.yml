@@ -30,6 +30,19 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Test workout generators
+        run: |
+          swiftc -o /tmp/generator-tests \
+            HIIT/Models/Equipment.swift \
+            HIIT/Models/WorkoutModels.swift \
+            HIIT/Engine/ProgressionEngine.swift \
+            HIIT/Engine/SpeedCalibration.swift \
+            HIIT/Engine/WorkoutGenerator.swift \
+            HIIT/Engine/EnduranceGenerator.swift \
+            HIIT/Engine/MetabolicMath.swift \
+            Tests/main.swift
+          /tmp/generator-tests
+
       # No signing in CI: a free Apple account can't mint distribution
       # certificates, and sideloading tools (AltStore/SideStore/Sideloadly)
       # re-sign the IPA with the installer's own Apple ID anyway.

@@ -1,13 +1,13 @@
 import SwiftUI
 import SwiftData
 
-/// Suggestion-first setup: pick where you're training → (machine details,
+/// Suggestion-first setup: pick today's purpose and where you're training → (machine details,
 /// first time only) → the app proposes a complete workout, length included.
 /// The whole point of the app is coaching people who don't know how to build
 /// workouts, so the plan arrives ready to start — duration and feel are
 /// controls for overriding it, and every change regenerates the plan.
 struct SetupView: View {
-    enum Step { case equipment, machine, suggestion }
+    enum Step { case purpose, equipment, machine, suggestion }
 
     let onStart: (WorkoutPlan) -> Void
 
@@ -15,7 +15,8 @@ struct SetupView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
-    @State private var step: Step = .equipment
+    @State private var step: Step = .purpose
+    @State private var mode: WorkoutMode = .intervals
     @State private var equipment: Equipment = .treadmill
     @State private var machine = MachineProfile.defaults(for: .treadmill)
     @State private var level: ExperienceLevel = .beginner
@@ -42,6 +43,7 @@ struct SetupView: View {
         NavigationStack {
             Group {
                 switch step {
+                case .purpose: purposeStep
                 case .equipment: equipmentStep
                 case .machine: machineStep
                 case .suggestion: suggestionStep
@@ -51,7 +53,7 @@ struct SetupView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if step != .equipment {
+                    if step != .purpose {
                         Button("Back") { goBack() }
                     }
                 }
@@ -70,6 +72,7 @@ struct SetupView: View {
 
     private var stepTitle: String {
         switch step {
+        case .purpose: return "What do you need today?"
         case .equipment: return "Where are you training?"
         case .machine: return "Your \(equipment.label.lowercased())"
         case .suggestion: return "Your next workout"
@@ -78,10 +81,51 @@ struct SetupView: View {
 
     private func goBack() {
         switch step {
-        case .equipment: break
+        case .purpose: break
+        case .equipment: step = .purpose
         case .machine: step = .equipment
         case .suggestion: step = settings.hasConfiguredMachine(for: equipment) && equipment != .outdoor ? .machine : .equipment
         }
+    }
+
+    // MARK: - Purpose
+
+    private var purposeStep: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                ForEach(WorkoutMode.allCases) { option in
+                    Button {
+                        mode = option
+                        step = .equipment
+                    } label: {
+                        HStack(spacing: 16) {
+                            Image(systemName: option.icon)
+                                .font(.title2)
+                                .foregroundStyle(option == .endurance ? Theme.recover : Theme.accent)
+                                .frame(width: 44)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(option.label).font(.headline)
+                                Text(option.blurb)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                        }
+                        .padding(16)
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("Not sure? Build endurance is the gentler choice. The coach keeps the effort sustainable rather than asking for hard intervals.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
+            }
+            .padding()
+        }
+        .background(Color(.systemGroupedBackground))
     }
 
     // MARK: - Step 1: equipment
@@ -205,12 +249,17 @@ struct SetupView: View {
                         }
                         HStack(spacing: 10) {
                             StatTile(title: "Total", value: clockString(plan.totalSeconds), subtitle: "min")
-                            StatTile(title: "Efforts", value: "\(plan.workPhaseCount)", subtitle: "work intervals")
+                            if plan.effectiveMode == .endurance {
+                                let steady = plan.phases.first { $0.kind == .steady }?.seconds ?? 0
+                                StatTile(title: "Endurance", value: clockString(steady), subtitle: "steady cardio")
+                            } else {
+                                StatTile(title: "Efforts", value: "\(plan.workPhaseCount)", subtitle: "work intervals")
+                            }
                             StatTile(title: "Energy", value: "\(previewKcal)", subtitle: "kcal (est.)")
                         }
 
                         durationControl
-                        feelControl
+                        if mode == .intervals { feelControl }
 
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(plan.phases) { phase in
@@ -220,7 +269,7 @@ struct SetupView: View {
                         .padding(14)
                         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
 
-                        if canShuffle {
+                        if mode == .intervals && canShuffle {
                             Button {
                                 shuffleOffset += 1
                                 buildPlan()
@@ -280,7 +329,7 @@ struct SetupView: View {
                 }
             }
             HStack(spacing: 8) {
-                ForEach(presets, id: \.self) { preset in
+                ForEach(mode == .endurance ? presets.filter { $0 >= 15 } : presets, id: \.self) { preset in
                     Button {
                         minutes = preset
                         buildPlan()
@@ -304,7 +353,8 @@ struct SetupView: View {
                     .buttonStyle(.plain)
                 }
             }
-            Stepper("Custom: \(minutes) minutes", value: minutesBinding, in: 8...60)
+            Stepper("Custom: \(minutes) minutes", value: minutesBinding,
+                    in: (mode == .endurance ? 15 : 8)...60)
                 .font(.subheadline)
         }
         .padding(14)
@@ -367,9 +417,10 @@ struct SetupView: View {
             level = settings.experience
         }
         computeSuggestion()
+        if mode == .endurance { suggestedMinutes = max(20, suggestedMinutes) }
         minutes = suggestedMinutes
         vibe = .auto
-        loadAdvice = weeklyLoadAdvice()
+        loadAdvice = mode == .intervals ? weeklyLoadAdvice() : nil
         buildPlan()
         step = .suggestion
     }
@@ -405,9 +456,14 @@ struct SetupView: View {
     /// easier day; the user can always ignore it.
     private func weeklyLoadAdvice() -> String? {
         let descriptor = FetchDescriptor<WorkoutSession>(sortBy: [SortDescriptor(\.date, order: .reverse)])
-        guard let sessions = try? context.fetch(descriptor), let last = sessions.first else { return nil }
+        guard let sessions = try? context.fetch(descriptor) else { return nil }
+        // Only interval sessions count toward the hard-dose guard — endurance
+        // sessions (stored with zero work intervals) are deliberately easy,
+        // and the intended weekly mix is intervals *plus* easy cardio days.
+        let hard = sessions.filter { $0.totalWorkIntervals > 0 }
+        guard let last = hard.first else { return nil }
         let now = Date()
-        let week = sessions.filter { now.timeIntervalSince($0.date) < 7 * 86400 }
+        let week = hard.filter { now.timeIntervalSince($0.date) < 7 * 86400 }
         let weekMinutes = week.reduce(0.0) { $0 + $1.totalSeconds } / 60
         if weekMinutes > 150 {
             return "That's over 150 interval minutes in 7 days — more isn't better. An easier session today protects the gains."
@@ -454,8 +510,13 @@ struct SetupView: View {
             preferLowImpact: settings.value.preferLowImpact,
             preferWalkRecoveries: settings.value.preferWalkRecoveries,
             hrSpeedModel: SpeedCalibration.fit(settings.value.speedCalibrationPoints[equipment.rawValue] ?? []))
-        canShuffle = WorkoutGenerator.candidateProtocols(input).count > 1
-        plan = WorkoutGenerator.makePlan(input)
+        if mode == .endurance {
+            canShuffle = false
+            plan = EnduranceGenerator.makePlan(input)
+        } else {
+            canShuffle = WorkoutGenerator.candidateProtocols(input).count > 1
+            plan = WorkoutGenerator.makePlan(input)
+        }
     }
 
     private func fetchProgress() -> EquipmentProgress? {

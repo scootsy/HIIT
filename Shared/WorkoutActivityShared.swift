@@ -29,6 +29,10 @@ struct WorkoutActivityAttributes: ActivityAttributes {
         var nextText: String?
         var effortsDone: Int
         var effortsTotal: Int
+        /// Endurance sessions count no efforts — the current phase's
+        /// heart-rate band ("65–75% HR"), shown in the efforts slot instead.
+        /// nil for interval sessions.
+        var hrBandText: String? = nil
         /// True when +/- buttons should show (a speed or resistance target exists).
         var adjustable: Bool
         /// Plan complete, clock counting up from phaseStart.
