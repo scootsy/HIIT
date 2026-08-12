@@ -284,7 +284,10 @@ enum WorkoutGenerator {
 
     // MARK: - Intensity targets
 
-    private struct Speeds {
+    // Speeds/BikeEfforts and their builders are internal (not private): the
+    // endurance generator anchors its steady block to the same personalized
+    // numbers, so the two modes can't drift apart.
+    struct Speeds {
         var warm: Double
         var easy: Double
         var work: Double
@@ -293,7 +296,7 @@ enum WorkoutGenerator {
         var easyIncline: Double
     }
 
-    private struct BikeEfforts {
+    struct BikeEfforts {
         var easyRes: Int
         var workRes: Int
         var sprintRes: Int
@@ -324,7 +327,7 @@ enum WorkoutGenerator {
         var norwegianRest: PhaseTarget
     }
 
-    private static func treadmillSpeeds(_ input: GeneratorInput) -> Speeds {
+    static func treadmillSpeeds(_ input: GeneratorInput) -> Speeds {
         // Recovery speeds are gait-explicit: beginners and intermediates
         // walk (2.8 / 3.4 mph), advanced users jog (5.0 mph). Humans switch
         // gait at ~4.3–4.9 mph (Hreljac 1993), so nothing between 4.2 and
@@ -400,7 +403,7 @@ enum WorkoutGenerator {
         return Speeds(warm: round1(warm), easy: round1(easy), work: round1(work), sprint: round1(sprint), workIncline: workIncline, easyIncline: easyIncline)
     }
 
-    private static func bikeEfforts(_ input: GeneratorInput) -> BikeEfforts {
+    static func bikeEfforts(_ input: GeneratorInput) -> BikeEfforts {
         let maxR = max(4, input.machine.maxResistance)
         // Resistance fractions are a first-session starting guess only —
         // "% of max resistance" means something different on every bike, so

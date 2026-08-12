@@ -93,6 +93,7 @@ final class WorkoutActivityController {
             nextText: nextText(engine: engine, settings: settings),
             effortsDone: engine.workEffortsDone,
             effortsTotal: engine.plan.workPhaseCount,
+            hrBandText: hrBandText(engine: engine),
             adjustable: engine.plan.equipment == .bike
                 ? engine.currentTarget.resistance != nil
                 : engine.currentTarget.speedMph != nil,
@@ -102,6 +103,16 @@ final class WorkoutActivityController {
                 LiveCoach.valueText(for: $0, engine: engine, useMetric: settings.value.useMetric)
             },
             suggestionEaseOff: (engine.liveSuggestion?.steps ?? -1) < 0)
+    }
+
+    /// Endurance sessions have no efforts tally — the lock screen shows the
+    /// current phase's aerobic band where "3/9 efforts" would sit. Mirrors
+    /// the in-app TARGET stat so the two never disagree.
+    private func hrBandText(engine: WorkoutEngine) -> String? {
+        guard engine.plan.effectiveMode == .endurance else { return nil }
+        guard let lo = engine.currentTarget.hrPercentLow,
+              let hi = engine.currentTarget.hrPercentHigh else { return "EASY" }
+        return "\(Int(lo))–\(Int(hi))% HR"
     }
 
     private func targetText(_ target: PhaseTarget, equipment: Equipment, settings: SettingsStore) -> String {

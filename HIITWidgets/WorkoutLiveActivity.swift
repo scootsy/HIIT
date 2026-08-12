@@ -34,7 +34,7 @@ struct WorkoutLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text("\(context.state.effortsDone)/\(context.state.effortsTotal)")
+                        Text(context.state.hrBandText ?? "\(context.state.effortsDone)/\(context.state.effortsTotal)")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         timerText(context.state)
@@ -182,7 +182,7 @@ private struct LockScreenWorkoutView: View {
                 .foregroundStyle(tint)
                 .lineLimit(1)
                 Spacer()
-                Text("\(state.effortsDone)/\(state.effortsTotal) efforts")
+                Text(state.hrBandText ?? "\(state.effortsDone)/\(state.effortsTotal) efforts")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
             }

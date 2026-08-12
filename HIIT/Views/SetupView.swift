@@ -456,9 +456,14 @@ struct SetupView: View {
     /// easier day; the user can always ignore it.
     private func weeklyLoadAdvice() -> String? {
         let descriptor = FetchDescriptor<WorkoutSession>(sortBy: [SortDescriptor(\.date, order: .reverse)])
-        guard let sessions = try? context.fetch(descriptor), let last = sessions.first else { return nil }
+        guard let sessions = try? context.fetch(descriptor) else { return nil }
+        // Only interval sessions count toward the hard-dose guard — endurance
+        // sessions (stored with zero work intervals) are deliberately easy,
+        // and the intended weekly mix is intervals *plus* easy cardio days.
+        let hard = sessions.filter { $0.totalWorkIntervals > 0 }
+        guard let last = hard.first else { return nil }
         let now = Date()
-        let week = sessions.filter { now.timeIntervalSince($0.date) < 7 * 86400 }
+        let week = hard.filter { now.timeIntervalSince($0.date) < 7 * 86400 }
         let weekMinutes = week.reduce(0.0) { $0 + $1.totalSeconds } / 60
         if weekMinutes > 150 {
             return "That's over 150 interval minutes in 7 days — more isn't better. An easier session today protects the gains."
@@ -507,8 +512,7 @@ struct SetupView: View {
             hrSpeedModel: SpeedCalibration.fit(settings.value.speedCalibrationPoints[equipment.rawValue] ?? []))
         if mode == .endurance {
             canShuffle = false
-            plan = EnduranceGenerator.makePlan(equipment: equipment, machine: machine,
-                                               level: level, minutes: minutes)
+            plan = EnduranceGenerator.makePlan(input)
         } else {
             canShuffle = WorkoutGenerator.candidateProtocols(input).count > 1
             plan = WorkoutGenerator.makePlan(input)
