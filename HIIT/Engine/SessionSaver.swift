@@ -50,12 +50,17 @@ enum SessionSaver {
             Calendar.current.dateComponents([.day], from: $0, to: result.startDate).day ?? 0
         }
         let baseLevel = ProgressionEngine.decayedLevel(progress.level, daysSince: gapDays)
-        let update = ProgressionEngine.evaluate(
+        var update = ProgressionEngine.evaluate(
             currentLevel: baseLevel,
             rpe: rpe,
             completionRatio: completion,
             avgWorkHRPercent: hrPercent,
             workOverrideLevels: result.workOverrideLevels)
+        if result.plan.effectiveMode == .endurance {
+            update = ProgressionEngine.Update(
+                newLevel: baseLevel,
+                note: "Endurance work builds your base without making the next interval session harder.")
+        }
 
         // Weekly progression cap: net +1 level (+0.2 mph work speed) per
         // rolling 7 days, however comfortable the sessions felt. Uncapped
@@ -86,9 +91,9 @@ enum SessionSaver {
 
         let declined = cappedLevel < baseLevel
         progress.level = cappedLevel
-        progress.sessionsCompleted += 1
+        if result.plan.effectiveMode == .intervals { progress.sessionsCompleted += 1 }
         progress.lastSessionDate = result.endDate
-        if result.plan.vibe == .easy || result.plan.isDeload == true {
+        if result.plan.effectiveMode == .endurance || result.plan.vibe == .easy || result.plan.isDeload == true {
             progress.hardSessionsSinceEasy = 0
         } else {
             progress.hardSessionsSinceEasy += 1

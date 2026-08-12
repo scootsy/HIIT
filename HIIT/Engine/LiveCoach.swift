@@ -18,6 +18,8 @@ final class LiveCoach {
             case overBand
             /// Consecutive completed efforts never reached the band.
             case underBandEfforts
+            /// A long endurance block stayed below its aerobic band.
+            case underBandSteady
             /// Long recoveries aren't bringing heart rate down.
             case insufficientRecovery
             /// 1-minute heart-rate recovery under the clinical flag.
@@ -52,6 +54,11 @@ final class LiveCoach {
         static let overBandResetPct = 1.0
         /// HR lags effort by 20–50s — never judge a work phase's early ramp.
         static let overBandMinPhaseElapsed = 45.0
+        /// Steady cardio gets a long settling window; only then can sustained
+        /// low HR justify one small increase.
+        static let steadySettleSeconds = 120.0
+        static let underBandSustainSeconds = 45.0
+        static let underBandTriggerPct = 3.0
         /// Chip lifetime before it quietly expires.
         static let displaySeconds = 20.0
         /// Minimum quiet time between any two chips.
@@ -82,6 +89,8 @@ final class LiveCoach {
     private var overBandHardSeconds = 0.0
     private var overBandPhaseIndex = -1
     private var overBandFiredPhase = -1
+    private var underSteadySeconds = 0.0
+    private var underSteadyFiredPhase = -1
     /// Completed-gradeable-effort count already consumed by a raise offer.
     private var underBandWatermark = 0
     /// recoveryMinPcts entries already consumed by a recovery offer.
@@ -205,6 +214,14 @@ final class LiveCoach {
                 overBandSeconds = 0
                 overBandHardSeconds = 0
             }
+            if engine.currentPhase.kind == .steady,
+               let lo = engine.currentTarget.hrPercentLow,
+               engine.phaseElapsed >= Rules.steadySettleSeconds,
+               pct < lo - Rules.underBandTriggerPct {
+                underSteadySeconds += dt
+            } else if engine.currentPhase.kind != .steady || pct >= (engine.currentTarget.hrPercentLow ?? 0) - 1 {
+                underSteadySeconds = 0
+            }
         }
 
         // Global gates for offering anything new.
@@ -241,6 +258,20 @@ final class LiveCoach {
                 overBandFiredPhase = engine.phaseIndex
                 return s
             }
+        }
+
+        // Sustained endurance work is slow to settle. After two minutes plus
+        // 45 seconds genuinely below the band, offer one small change and let
+        // the user confirm it on the physical machine.
+        if engine.currentPhase.kind == .steady,
+           !acceptedEaseOff,
+           underSteadyFiredPhase != engine.phaseIndex,
+           underSteadySeconds >= Rules.underBandSustainSeconds,
+           let s = offer(.underBandSteady, steps: 1, anchor: engine.phaseIndex,
+                         message: "Still below your endurance range — raise it one small step",
+                         engine: engine, now: now) {
+            underSteadyFiredPhase = engine.phaseIndex
+            return s
         }
 
         // R2 — 1-minute heart-rate recovery under the clinical flag. Only

@@ -10,6 +10,8 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 
 **Tell it who you are.** Connect Apple Health and it pulls your age, weight, height, and resting heart rate to set heart-rate zones (Tanaka formula), calibrate starting intensity, and improve calorie estimates. Or enter things manually — everything degrades gracefully.
 
+**Choose what you need today.** Pick **Hard intervals** for the original HIIT coach, or **Build endurance** for sustainable treadmill/bike cardio. Endurance sessions include a real warm-up and cool-down, aim for a conversational 65–75% of estimated max heart rate, and use the same one-tap live coach to suggest small speed or resistance changes only after your heart rate has had time to settle. Without live heart rate, the full-sentence/RPE cues still guide the session.
+
 **It builds the session — length included.** Pick where you're training and the app proposes your next workout whole: it chooses the duration from your level, history, and recovery state, then assembles a warm-up, a research-based interval protocol, and a cool-down that exactly fills it. Everything is overridable — duration chips (8–60 min via the stepper) and a feel picker ("Coach's pick", "Push me", "Easier today") regenerate the plan in place:
 
 | Protocol | Source | When you'll see it |

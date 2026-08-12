@@ -29,6 +29,21 @@ enum SessionVibe: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// The reason for today's session. `intervals` preserves the original app;
+/// `endurance` is sustained, conversational cardio rather than HIIT.
+enum WorkoutMode: String, Codable, CaseIterable, Identifiable {
+    case intervals, endurance
+
+    var id: String { rawValue }
+    var label: String { self == .intervals ? "Hard intervals" : "Build endurance" }
+    var blurb: String {
+        self == .intervals
+            ? "Short hard efforts with real recoveries"
+            : "Sustainable cardio with live heart-rate coaching"
+    }
+    var icon: String { self == .intervals ? "bolt.fill" : "heart.fill" }
+}
+
 enum PhaseKind: String, Codable {
     case warmup, work, recover, steady, cooldown
 
@@ -72,6 +87,9 @@ struct WorkoutPlan: Identifiable, Codable, Equatable {
     var vibe: SessionVibe
     var minutes: Int
     var cueLeadSeconds: Int
+    /// Optional so checkpoints created before endurance workouts existed
+    /// continue to decode as ordinary interval sessions.
+    var mode: WorkoutMode? = nil
     /// True when the generator quietly converted an auto session into a
     /// recovery-week deload. Optional so checkpoints written before this
     /// field existed still decode. SessionSaver keys the deload-counter
@@ -81,6 +99,7 @@ struct WorkoutPlan: Identifiable, Codable, Equatable {
 
     var totalSeconds: Double { phases.reduce(0) { $0 + $1.seconds } }
     var workPhaseCount: Int { phases.filter { $0.kind == .work }.count }
+    var effectiveMode: WorkoutMode { mode ?? .intervals }
 }
 
 /// One phase as it actually happened, persisted with the session.

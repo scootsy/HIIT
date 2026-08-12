@@ -67,6 +67,17 @@ enum SessionObjectives {
 
     static func evaluate(engine: WorkoutEngine) -> [Line]? {
         guard let maxHR = engine.maxHR, maxHR > 0, engine.maxObservedHR != nil else { return nil }
+        // Endurance sessions have a different success question (sustainable
+        // time, not high-intensity dose). Until that dedicated summary has
+        // enough continuous-HR bookkeeping, never show misleading HIIT grades.
+        if engine.plan.effectiveMode == .endurance {
+            if engine.coachSuggestionsOffered > 0 {
+                return [Line(verdict: nil,
+                             title: "Live coach: \(engine.coachSuggestionsAccepted) of \(engine.coachSuggestionsOffered) suggestions applied",
+                             detail: "The changes you approved helped keep this session sustainable.")]
+            }
+            return nil
+        }
         var lines: [Line] = []
 
         let easyDay = engine.plan.vibe == .easy || engine.plan.isDeload == true

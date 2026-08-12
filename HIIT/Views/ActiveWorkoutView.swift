@@ -244,7 +244,11 @@ struct ActiveWorkoutView: View {
                       engine.inOvertime ? "+\(clockString(engine.overtimeSeconds))" : clockString(engine.totalRemaining),
                       .white)
             Divider().frame(height: 34).overlay(Color.white.opacity(0.10)).padding(.horizontal, 16)
-            statBlock("EFFORT", "\(engine.workEffortsDone)/\(engine.plan.workPhaseCount)", phaseColor)
+            if engine.plan.effectiveMode == .endurance {
+                statBlock("TARGET", enduranceTargetText, phaseColor)
+            } else {
+                statBlock("EFFORT", "\(engine.workEffortsDone)/\(engine.plan.workPhaseCount)", phaseColor)
+            }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {
                 Text(secondaryStatsLabel)
@@ -260,6 +264,12 @@ struct ActiveWorkoutView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(workoutSurface(tint: .white.opacity(0.055)))
+    }
+
+    private var enduranceTargetText: String {
+        guard let low = engine.currentTarget.hrPercentLow,
+              let high = engine.currentTarget.hrPercentHigh else { return "EASY" }
+        return "\(Int(low))–\(Int(high))%"
     }
 
     private func statBlock(_ title: String, _ value: String, _ color: Color) -> some View {
