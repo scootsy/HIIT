@@ -136,14 +136,24 @@ struct ActiveWorkoutContainerView: View {
 
 // MARK: - Live workout
 
-/// Layout: stats card → plan spine (tap it to open the effort editor) →
-/// dual-arc ring → target card → heart-rate panel → controls.
+/// The live screen lays itself out for the space it's given, never for a
+/// named device:
+///
+/// - **One column** — a phone held upright, iPhone Duo's cover display, its
+///   inner display in portrait, half of it in Split View. Stats → plan spine
+///   (tap it to open the effort editor) → timer ring → target → heart rate →
+///   controls. The ring and the heart-rate panel flex so the column exactly
+///   fills the screen: a short display gets a smaller ring and drops the
+///   chart, a tall one grows both. Nothing scrolls unless it truly can't fit
+///   (the effort editor open on a small screen).
+/// - **Two panes side by side** — any landscape canvas, and a Duo folded like
+///   a book: the ring and the target on one side, stats, heart rate and
+///   controls on the other, with the crease in the gap between them.
+/// - **Two panes stacked** — a Duo folded like a laptop: the ring and target
+///   on the upright half, everything you touch on the half lying flat.
+///
 /// The amber early warning tints only the ring, the spine's current segment
-/// and the target card — never the background. The whole stack lives in a
-/// scroll view sized to the screen: on roomy phones nothing moves and the
-/// target card floats centered between ring and heart-rate panel, while on
-/// small screens (or with the effort editor open) it scrolls instead of
-/// clipping the controls off the bottom edge.
+/// and the target card — never the background.
 struct ActiveWorkoutView: View {
     let engine: WorkoutEngine
     @Environment(SettingsStore.self) private var settings
@@ -189,32 +199,7 @@ struct ActiveWorkoutView: View {
                 .animation(.easeInOut(duration: 0.6), value: backgroundColor)
 
             GeometryReader { geo in
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 0) {
-                        statsCard
-                        spine.padding(.top, 14)
-                        if editorOpen, !pastWorkIndices.isEmpty { effortEditor.padding(.top, 12) }
-                        ring.padding(.top, 14)
-                        Spacer(minLength: 12)
-                        targetCard
-                        if let hint = upNextHint {
-                            Text(hint)
-                                .font(Self.labelFont).tracking(1.7)
-                                .foregroundStyle(.white.opacity(0.38))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 8)
-                        }
-                        Spacer(minLength: 12)
-                        hrPanel
-                        controls.padding(.top, 16)
-                    }
-                    .padding(.horizontal, 22)
-                    .padding(.top, 16)
-                    .frame(minHeight: geo.size.height)
-                }
-                .scrollBounceBehavior(.basedOnSize)
+                arranged(size: geo.size, fold: geo.foldDivision)
             }
         }
         .preferredColorScheme(.dark)
@@ -236,9 +221,183 @@ struct ActiveWorkoutView: View {
         }
     }
 
+    // MARK: Arrangement
+
+    enum Arrangement: Equatable {
+        case column
+        /// Leading pane width, then the gap (the crease, when folded).
+        case sideBySide(leading: CGFloat, gap: CGFloat)
+        /// Top pane height, then the gap (the crease).
+        case stacked(top: CGFloat, gap: CGFloat)
+    }
+
+    static func arrangement(for size: CGSize, fold: FoldDivision?) -> Arrangement {
+        if let fold {
+            // Keep each pane wholly on one side of the crease.
+            if fold.isVertical {
+                return .sideBySide(leading: fold.frame.minX, gap: fold.frame.width)
+            }
+            return .stacked(top: fold.frame.minY, gap: fold.frame.height)
+        }
+        // Clearly wider than tall, with room for two real panes: landscape.
+        if size.width >= 560, size.width >= size.height * 1.15 {
+            let gap: CGFloat = 16
+            return .sideBySide(leading: ((size.width - gap) / 2).rounded(.down), gap: gap)
+        }
+        return .column
+    }
+
+    @ViewBuilder
+    private func arranged(size: CGSize, fold: FoldDivision?) -> some View {
+        switch Self.arrangement(for: size, fold: fold) {
+        case .column:
+            pane(width: size.width, height: size.height, maxContentWidth: 560) { space in
+                columnStack(space)
+            }
+        case .sideBySide(let leading, let gap):
+            HStack(spacing: 0) {
+                pane(width: leading, height: size.height) { space in
+                    focusStack(space)
+                }
+                Color.clear.frame(width: gap)
+                pane(width: max(0, size.width - leading - gap), height: size.height) { space in
+                    dataStack(space)
+                }
+            }
+        case .stacked(let top, let gap):
+            VStack(spacing: 0) {
+                pane(width: size.width, height: top) { space in
+                    focusStack(space)
+                }
+                Color.clear.frame(height: gap)
+                pane(width: size.width, height: max(0, size.height - top - gap)) { space in
+                    dataStack(space)
+                }
+            }
+        }
+    }
+
+    /// One region of the screen. Its content is told how much room it has
+    /// and fills it exactly when it fits; when it can't (a very short pane,
+    /// the effort editor open) the region scrolls instead of clipping the
+    /// controls away.
+    private func pane<Content: View>(width: CGFloat,
+                                     height: CGFloat,
+                                     maxContentWidth: CGFloat = .infinity,
+                                     @ViewBuilder content: (CGSize) -> Content) -> some View {
+        let inset: CGFloat = width < 350 ? 14 : 22
+        let vertical: CGFloat = height < 430 ? 8 : 14
+        let space = CGSize(width: max(0, min(width - inset * 2, maxContentWidth)),
+                           height: max(0, height - vertical * 2))
+        let filled = content(space)
+        return ScrollView(showsIndicators: false) {
+            filled
+                .frame(width: space.width)
+                .padding(.vertical, vertical)
+                .frame(maxWidth: .infinity, minHeight: height)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(width: width, height: height)
+    }
+
+    private func rowSpacing(_ space: CGSize) -> CGFloat {
+        space.height < 430 ? 10 : 12
+    }
+
+    /// Everything in one column.
+    private func columnStack(_ space: CGSize) -> some View {
+        FlexVStack(spacing: rowSpacing(space)) {
+            statsCard
+            spine
+            if editorOpen, !pastWorkIndices.isEmpty { effortEditor }
+            ring
+                .flexHeight(min: 150, ideal: 200, max: min(360, space.width), weight: 1)
+            targetCard
+            if let hint = upNextHint { hintLine(hint) }
+            WorkoutHRPanel(engine: engine)
+                .flexHeight(min: hrPanelMinimum, ideal: 150, max: 330, weight: 0.55, yields: true)
+            controls
+        }
+    }
+
+    /// The glanceable pane: the timer and what to hold right now.
+    @ViewBuilder
+    private func focusStack(_ space: CGSize) -> some View {
+        if space.width > space.height * 1.45 {
+            // A wide, short strip (the upright half of a laptop-style fold):
+            // ring beside the target instead of above it.
+            let diameter = max(120, min(space.height, 320, space.width * 0.42))
+            HStack(spacing: 24) {
+                ring.frame(width: diameter, height: diameter)
+                VStack(spacing: 10) {
+                    targetCard
+                    if let hint = upNextHint { hintLine(hint) }
+                }
+                .frame(maxWidth: 460)
+            }
+            .frame(maxWidth: .infinity)
+        } else {
+            FlexVStack(spacing: rowSpacing(space)) {
+                ring
+                    .flexHeight(min: 130, ideal: 200, max: min(380, space.width), weight: 1)
+                targetCard
+                if let hint = upNextHint { hintLine(hint) }
+            }
+        }
+    }
+
+    /// The pane you read at a glance less often and touch more: stats, plan,
+    /// heart rate, controls.
+    @ViewBuilder
+    private func dataStack(_ space: CGSize) -> some View {
+        if space.width > space.height * 1.9, space.width >= 620 {
+            // A wide, short strip (the flat half of a laptop-style fold):
+            // controls beside the data instead of beneath it.
+            HStack(spacing: 28) {
+                FlexVStack(spacing: rowSpacing(space)) {
+                    statsCard
+                    spine
+                    if editorOpen, !pastWorkIndices.isEmpty { effortEditor }
+                    WorkoutHRPanel(engine: engine)
+                        .flexHeight(min: hrPanelMinimum, ideal: 150, max: 420, weight: 1)
+                }
+                .frame(minHeight: space.height)
+                controls
+            }
+        } else {
+            FlexVStack(spacing: rowSpacing(space)) {
+                statsCard
+                spine
+                if editorOpen, !pastWorkIndices.isEmpty { effortEditor }
+                WorkoutHRPanel(engine: engine)
+                    .flexHeight(min: hrPanelMinimum, ideal: 150, max: 420, weight: 1)
+                controls
+            }
+        }
+    }
+
+    /// The heart-rate panel can shrink to its header, but never so far that
+    /// a live suggestion's Apply button would be cut off.
+    private var hrPanelMinimum: CGFloat {
+        if engine.liveSuggestion != nil { return 140 }
+        return engine.coachMessage.isEmpty ? 58 : 86
+    }
+
     // MARK: Stats card
 
     private var statsCard: some View {
+        // A narrow pane (half a folded Duo, Split View) drops the kcal ·
+        // distance readout before it squeezes the two numbers that matter.
+        ViewThatFits(in: .horizontal) {
+            statsRow(showSecondary: true)
+            statsRow(showSecondary: false)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(workoutSurface(tint: .white.opacity(0.055)))
+    }
+
+    private func statsRow(showSecondary: Bool) -> some View {
         HStack(spacing: 0) {
             statBlock("REMAINING",
                       engine.inOvertime ? "+\(clockString(engine.overtimeSeconds))" : clockString(engine.totalRemaining),
@@ -250,20 +409,23 @@ struct ActiveWorkoutView: View {
                 statBlock("EFFORT", "\(engine.workEffortsDone)/\(engine.plan.workPhaseCount)", phaseColor)
             }
             Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(secondaryStatsLabel)
-                    .font(Self.labelFont).tracking(1.7)
-                    .foregroundStyle(.white.opacity(0.4))
-                Text(secondaryStatsText)
-                    .font(.system(size: 16, weight: .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.75))
-                    .padding(.top, 3)
+            if showSecondary {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(secondaryStatsLabel)
+                        .font(Self.labelFont).tracking(1.7)
+                        .foregroundStyle(.white.opacity(0.4))
+                        .lineLimit(1)
+                    Text(secondaryStatsText)
+                        .font(.system(size: 16, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                        .padding(.top, 3)
+                }
+                .fixedSize()
+                .accessibilityElement(children: .combine)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(workoutSurface(tint: .white.opacity(0.055)))
     }
 
     private var enduranceTargetText: String {
@@ -277,11 +439,15 @@ struct ActiveWorkoutView: View {
             Text(title)
                 .font(Self.labelFont).tracking(1.7)
                 .foregroundStyle(.white.opacity(0.4))
+                .lineLimit(1)
             Text(value)
                 .font(numerals(26))
                 .monospacedDigit()
                 .foregroundStyle(color)
+                .lineLimit(1)
         }
+        .fixedSize()
+        .accessibilityElement(children: .combine)
     }
 
     private var secondaryStatsLabel: String {
@@ -358,11 +524,17 @@ struct ActiveWorkoutView: View {
                                 lineWidth: 1)))
             .contentShape(Rectangle())
             .onTapGesture { editorOpen.toggle() }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Workout plan, phase \(min(engine.phaseIndex + 1, engine.plan.phases.count)) of \(engine.plan.phases.count)")
+            .accessibilityHint("Opens the list of finished efforts so you can correct one")
+            .accessibilityAddTraits(.isButton)
 
             HStack {
                 Text(spineCaption)
                     .font(Self.labelFont).tracking(1.7)
                     .foregroundStyle(engine.isWarning ? Theme.warning : .white.opacity(0.3))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 Spacer()
             }
             .padding(.horizontal, 4)
@@ -393,6 +565,7 @@ struct ActiveWorkoutView: View {
                         Text(engine.plan.phases[index].label)
                             .font(.system(size: 14, weight: .medium))
                             .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(1)
                         Spacer(minLength: 8)
                         Text(primaryText(engine.appliedTargets[index]))
                             .font(.system(size: 14, weight: .medium))
@@ -408,6 +581,7 @@ struct ActiveWorkoutView: View {
                     .padding(.vertical, 11)
                 }
                 .buttonStyle(.plain)
+                .accessibilityHint("Corrects this effort's speed or resistance")
                 if index != pastWorkIndices.last {
                     Divider().overlay(Color.white.opacity(0.07))
                 }
@@ -418,55 +592,66 @@ struct ActiveWorkoutView: View {
 
     // MARK: Ring — thin outer arc = whole session, thick inner = this phase
 
+    /// Draws at whatever size it's given: every stroke, inset and numeral is
+    /// proportional to the diameter, so a 150-point ring on a short display
+    /// is the same picture as a 360-point one on the Duo's inner display.
     private var ring: some View {
-        ZStack {
-            Circle()
-                .fill(RadialGradient(colors: [phaseColor.opacity(0.20), .clear],
-                                     center: .center, startRadius: 0, endRadius: 125))
-                .padding(26)
+        GeometryReader { geo in
+            let side = max(0, min(geo.size.width, geo.size.height))
+            let scale = side / 250
+            // Small labels shrink and grow less than the ring itself.
+            let labelScale = max(0.85, min(scale, 1.35))
+            ZStack {
+                Circle()
+                    .fill(RadialGradient(colors: [phaseColor.opacity(0.20), .clear],
+                                         center: .center, startRadius: 0, endRadius: max(1, side / 2)))
+                    .padding(26 * scale)
 
-            Circle().stroke(Color.white.opacity(0.07), lineWidth: 2.5)
-            Circle()
-                .trim(from: 0, to: sessionProgress)
-                .stroke(Color.white.opacity(0.5), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .rotationEffect(.degrees(-90))
+                Circle().stroke(Color.white.opacity(0.07), lineWidth: 2.5)
+                Circle()
+                    .trim(from: 0, to: sessionProgress)
+                    .stroke(Color.white.opacity(0.5), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
 
-            Circle().stroke(Color.white.opacity(0.10), lineWidth: 16).padding(14.5)
-            Circle()
-                .trim(from: 0, to: engine.phaseProgress)
-                .stroke(phaseColor, style: StrokeStyle(lineWidth: 16, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .padding(14.5)
-                .animation(.linear(duration: 0.1), value: engine.phaseProgress)
+                Circle().stroke(Color.white.opacity(0.10), lineWidth: 16 * scale).padding(14.5 * scale)
+                Circle()
+                    .trim(from: 0, to: engine.phaseProgress)
+                    .stroke(phaseColor, style: StrokeStyle(lineWidth: 16 * scale, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .padding(14.5 * scale)
+                    .animation(.linear(duration: 0.1), value: engine.phaseProgress)
 
-            // The inner padding plus a scale factor keep the numerals fully
-            // inside the ring — an un-scalable 84/104pt string used to spill
-            // over the arc on compressed layouts.
-            VStack(spacing: 5) {
-                Text(ringTitle)
-                    .font(.system(size: 10.5, weight: engine.isWarning ? .bold : .semibold))
-                    .tracking(3.4)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .foregroundStyle(phaseColor)
-                Text(ringValue)
-                    .font(numerals(engine.isWarning ? 104 : 84, .heavy))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.35)
-                    .foregroundStyle(.white)
-                if let cue = ringSubtitle {
-                    Text(cue)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.55))
+                // The inner padding plus a scale factor keep the numerals
+                // fully inside the ring at every size.
+                VStack(spacing: 5 * scale) {
+                    Text(ringTitle)
+                        .font(.system(size: 10.5 * labelScale, weight: engine.isWarning ? .bold : .semibold))
+                        .tracking(3.4)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
+                        .foregroundStyle(phaseColor)
+                    Text(ringValue)
+                        .font(numerals((engine.isWarning ? 104 : 84) * scale, .heavy))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.35)
+                        .foregroundStyle(.white)
+                    if let cue = ringSubtitle {
+                        Text(cue)
+                            .font(.system(size: 14 * labelScale, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
                 }
+                .padding(40 * scale)
             }
-            .padding(40)
+            .frame(width: side, height: side)
+            .frame(width: geo.size.width, height: geo.size.height)
         }
-        .frame(maxWidth: 250)
-        .aspectRatio(1, contentMode: .fit)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ringAccessibilityLabel)
+        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private var sessionProgress: Double {
@@ -491,6 +676,16 @@ struct ActiveWorkoutView: View {
         return engine.currentPhase.cue
     }
 
+    private var ringAccessibilityLabel: String {
+        if engine.inOvertime { return "Workout complete" }
+        let seconds = Int(engine.phaseRemaining.rounded(.up))
+        let remaining = seconds >= 60
+            ? "\(seconds / 60) minutes \(seconds % 60) seconds"
+            : "\(seconds) seconds"
+        let paused = engine.state == .paused ? ", paused" : ""
+        return "\(engine.currentPhase.kind.title), \(remaining) remaining\(paused)"
+    }
+
     // MARK: Target card
 
     private var targetCard: some View {
@@ -502,6 +697,8 @@ struct ActiveWorkoutView: View {
                             .font(numerals(28, .semibold))
                             .foregroundStyle(.white.opacity(0.4))
                             .strikethrough(true, color: .white.opacity(0.4))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
                         Image(systemName: "arrow.right")
                             .font(.system(size: 18, weight: .medium))
                             .foregroundStyle(.white.opacity(0.5))
@@ -509,20 +706,25 @@ struct ActiveWorkoutView: View {
                             .font(numerals(56, .heavy))
                             .monospacedDigit()
                             .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
                     }
                     Text("\(nextPhase.kind.title.uppercased()) · \(clockString(nextPhase.seconds))")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.color(for: nextPhase.kind))
+                        .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
                 .padding(.horizontal, 14)
                 .background(workoutSurface(tint: Theme.warning.opacity(0.14),
                                            stroke: Theme.warning.opacity(0.42)))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Get ready: \(nextPhase.kind.title), \(spokenTarget(next))")
             } else {
                 HStack(spacing: 14) {
                     if adjustable {
-                        stepper("minus") { engine.adjustCurrentTarget(up: false) }
+                        stepper("minus", label: "Decrease target") { engine.adjustCurrentTarget(up: false) }
                     }
                     VStack(spacing: 2) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -530,21 +732,28 @@ struct ActiveWorkoutView: View {
                                 .font(numerals(44))
                                 .monospacedDigit()
                                 .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.5)
                             if let secondary = secondaryText(engine.currentTarget) {
                                 Text(secondary)
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.white.opacity(0.5))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
                             }
                         }
                         if engine.currentTargetAdjusted {
                             Text("plan \(primaryText(engine.currentPhase.target))")
                                 .font(Self.labelFont).tracking(1.7)
                                 .foregroundStyle(.white.opacity(0.45))
+                                .lineLimit(1)
                         }
                     }
                     .frame(maxWidth: .infinity)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Target: \(spokenTarget(engine.currentTarget))")
                     if adjustable {
-                        stepper("plus") { engine.adjustCurrentTarget(up: true) }
+                        stepper("plus", label: "Increase target") { engine.adjustCurrentTarget(up: true) }
                     }
                 }
                 .padding(.vertical, 12)
@@ -555,7 +764,7 @@ struct ActiveWorkoutView: View {
         }
     }
 
-    private func stepper(_ systemName: String, action: @escaping () -> Void) -> some View {
+    private func stepper(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 20, weight: .light))
@@ -565,6 +774,16 @@ struct ActiveWorkoutView: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func hintLine(_ hint: String) -> some View {
+        Text(hint)
+            .font(Self.labelFont).tracking(1.7)
+            .foregroundStyle(.white.opacity(0.38))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity)
     }
 
     /// One quiet line under the target card: what's coming and at what
@@ -626,11 +845,9 @@ struct ActiveWorkoutView: View {
         }
     }
 
-    // MARK: Heart-rate panel — its own view so the chart doesn't rebuild
-    // on every 0.1s timer tick, only when heart-rate state actually changes.
-
-    private var hrPanel: some View {
-        WorkoutHRPanel(engine: engine)
+    /// The target as a sentence, for VoiceOver.
+    private func spokenTarget(_ target: PhaseTarget) -> String {
+        targetLine(for: target, equipment: engine.plan.equipment, settings: settings)
     }
 
     // MARK: Controls
@@ -648,6 +865,7 @@ struct ActiveWorkoutView: View {
                     .overlay(Circle().stroke(.white.opacity(0.09), lineWidth: 1))
                     .foregroundStyle(.white.opacity(0.85))
             }
+            .accessibilityLabel(engine.inOvertime ? "Finish workout" : "End workout")
             Button {
                 engine.state == .paused ? engine.resume() : engine.pause()
             } label: {
@@ -658,6 +876,7 @@ struct ActiveWorkoutView: View {
                     .overlay(Circle().stroke(.white.opacity(0.14), lineWidth: 1))
                     .foregroundStyle(.white)
             }
+            .accessibilityLabel(engine.state == .paused ? "Resume" : "Pause")
             Button {
                 engine.skip()
             } label: {
@@ -672,7 +891,9 @@ struct ActiveWorkoutView: View {
             // it doesn't read as a live control that does nothing.
             .opacity(engine.inOvertime || engine.state == .paused ? 0.3 : 1)
             .disabled(engine.inOvertime || engine.state == .paused)
+            .accessibilityLabel("Skip to next phase")
         }
+        .fixedSize()
         .padding(.bottom, 4)
     }
 }
@@ -683,33 +904,52 @@ struct ActiveWorkoutView: View {
 /// only rebuilt when a heart-rate value arrives (~1/s) — a 60-minute session
 /// accumulates ~1800 samples, and rebuilding thousands of marks ten times a
 /// second burned main-thread CPU exactly when the screen stays on longest.
+///
+/// The panel draws at whatever height the layout gives it: the header (and
+/// any coach line or suggestion) always shows, and the chart takes the rest
+/// — or steps aside entirely when there isn't room for a readable one.
 private struct WorkoutHRPanel: View {
     let engine: WorkoutEngine
     @Environment(BluetoothHeartRateManager.self) private var ble
     @Environment(SettingsStore.self) private var settings
 
     private static let labelFont = Font.system(size: 9.5, weight: .semibold)
+    /// Below this a chart is a smudge, not a curve.
+    private static let minimumChartHeight: CGFloat = 52
 
     var body: some View {
         // The periodic timeline re-evaluates staleness every few seconds so
         // "– –" replaces the last reading when a source goes quiet.
         TimelineView(.periodic(from: .now, by: 5)) { _ in
-            VStack(alignment: .leading, spacing: 11) {
+            VStack(alignment: .leading, spacing: 0) {
                 header
                 if let suggestion = engine.liveSuggestion {
                     suggestionChip(suggestion)
+                        .padding(.top, 11)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 } else if !engine.coachMessage.isEmpty {
                     Text(engine.coachMessage)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                        .padding(.top, 11)
                 }
-                chart
+                // Whatever height is left belongs to the chart.
+                GeometryReader { space in
+                    if space.size.height >= Self.minimumChartHeight + 11 {
+                        chart(compact: space.size.height < 96)
+                            .padding(.top, 11)
+                            .frame(width: space.size.width, height: space.size.height)
+                    }
+                }
+                .frame(minHeight: 0, maxHeight: .infinity)
             }
             .animation(.easeInOut(duration: 0.25), value: engine.liveSuggestion?.id)
             .padding(.horizontal, 15)
             .padding(.top, 13)
             .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(workoutSurface(tint: .white.opacity(0.055)))
         }
     }
@@ -725,10 +965,14 @@ private struct WorkoutHRPanel: View {
                 Text(suggestion.message)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(suggestionValueText(suggestion))
                     .font(Self.labelFont).tracking(1.4)
                     .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             Spacer(minLength: 8)
             Button { engine.acceptSuggestion() } label: {
@@ -739,6 +983,7 @@ private struct WorkoutHRPanel: View {
                     .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Apply suggestion")
             Button { engine.dismissSuggestion() } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))
@@ -747,6 +992,7 @@ private struct WorkoutHRPanel: View {
                     .foregroundStyle(.white.opacity(0.6))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss suggestion")
         }
         .padding(10)
         .background(
@@ -798,13 +1044,16 @@ private struct WorkoutHRPanel: View {
                 Text(summary)
                     .font(Self.labelFont).tracking(1.7)
                     .foregroundStyle(.white.opacity(0.35))
-                    .fixedSize()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
         }
+        .frame(height: 34)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
-    private var chart: some View {
+    private func chart(compact: Bool) -> some View {
         if engine.hrHistory.count >= 2 {
             let baseline = graphYDomain.lowerBound
             Chart {
@@ -840,7 +1089,7 @@ private struct WorkoutHRPanel: View {
                 plotArea.clipped()
             }
             .chartYAxis {
-                AxisMarks(position: .leading, values: yAxisValues) { value in
+                AxisMarks(position: .leading, values: yAxisValues(count: compact ? 2 : 4)) { value in
                     AxisGridLine().foregroundStyle(.white.opacity(0.055))
                     AxisValueLabel {
                         if let bpm = value.as(Double.self) {
@@ -862,12 +1111,12 @@ private struct WorkoutHRPanel: View {
                     }
                 }
             }
-            .frame(height: 116)
+            .accessibilityLabel("Heart-rate chart")
         } else {
             Text("Heart-rate curve draws here")
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.3))
-                .frame(maxWidth: .infinity, minHeight: 116)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -915,12 +1164,13 @@ private struct WorkoutHRPanel: View {
         return max(40, lo - 12)...(hi + 15)
     }
 
-    /// Four round bpm gridlines inside whatever range is in play.
-    private var yAxisValues: [Double] {
+    /// A few round bpm gridlines inside whatever range is in play — fewer
+    /// when the chart is short, so the labels never collide.
+    private func yAxisValues(count: Int) -> [Double] {
         let lower = graphYDomain.lowerBound, upper = graphYDomain.upperBound
-        let step = max(10, ((upper - lower) / 4 / 10).rounded() * 10)
+        let step = max(10, ((upper - lower) / Double(count) / 10).rounded() * 10)
         let start = (lower / step).rounded(.up) * step
-        return (0..<4).map { start + Double($0) * step }.filter { $0 < upper }
+        return (0..<count).map { start + Double($0) * step }.filter { $0 < upper }
     }
 
     private var xAxisValues: [Double] {

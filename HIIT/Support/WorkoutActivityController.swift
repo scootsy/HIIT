@@ -5,9 +5,10 @@ import UIKit
 /// Owns the workout's Live Activity: starts it with the session, pushes a new
 /// content state at every phase boundary / pause / adjustment, and ends it
 /// when the session leaves the screen. The countdown itself is date-based and
-/// rendered by the system, so it keeps ticking while the app is suspended —
-/// only phase *changes* need the app awake, which matches how the engine
-/// already works (cues pause in the background, time is credited on return).
+/// rendered by the system, so it keeps ticking even if iOS suspends the app —
+/// only phase *changes* need the app awake. Normally it is: the workout's
+/// audio session keeps the engine running in the background, and should iOS
+/// suspend it anyway the engine credits the gap when it wakes.
 @MainActor
 final class WorkoutActivityController {
 

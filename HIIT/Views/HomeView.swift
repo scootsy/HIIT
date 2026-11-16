@@ -22,6 +22,7 @@ struct HomeView: View {
                 }
                 .padding(.horizontal)
                 .padding(.top, 16)
+                .readableWidth(720)
             }
             .background(Color(.systemGroupedBackground))
             .safeAreaInset(edge: .bottom) { startBar }
@@ -151,7 +152,8 @@ struct HomeView: View {
             }
             .font(.title3.weight(.semibold))
             .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
+            // A thumb-width button, not a banner, on wide canvases.
+            .frame(maxWidth: 520)
             .padding(.vertical, 19)
             .background(
                 LinearGradient(colors: [Theme.accent, Color(hex: 0xC2354F)],
@@ -163,6 +165,7 @@ struct HomeView: View {
         .padding(.horizontal, 16)
         .padding(.top, 6)
         .padding(.bottom, 16)
+        .frame(maxWidth: .infinity)
         .background(
             LinearGradient(colors: [Color(.systemGroupedBackground).opacity(0),
                                     Color(.systemGroupedBackground)],

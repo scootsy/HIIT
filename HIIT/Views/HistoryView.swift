@@ -356,6 +356,7 @@ struct SessionDetailView: View {
                 }
             }
             .padding()
+            .readableWidth(680)
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Session")
@@ -384,7 +385,7 @@ struct SessionDetailView: View {
                         Label("Delete session", systemImage: "trash")
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Label("More", systemImage: "ellipsis.circle")
                 }
             }
         }

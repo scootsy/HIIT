@@ -2,23 +2,39 @@ import SwiftUI
 import SwiftData
 
 struct RootView: View {
-    var storeLoadFailed: Bool = false
+    enum Tab: Hashable {
+        case train, history, settings
+    }
+
+    var storeLoadFailed: Bool
 
     @AppStorage("hiit.hasOnboarded") private var hasOnboarded = false
     @Environment(SettingsStore.self) private var settings
     @Environment(HealthKitManager.self) private var health
     @Environment(\.modelContext) private var context
+    @State private var tab: Tab
     @State private var pendingCheckpoint: WorkoutCheckpoint? = nil
     @State private var showStoreWarning = false
 
+    init(storeLoadFailed: Bool = false, initialTab: Tab = .train) {
+        self.storeLoadFailed = storeLoadFailed
+        _tab = State(initialValue: initialTab)
+    }
+
     var body: some View {
-        TabView {
+        // Standard tabs on purpose: the system moves them where each device
+        // wants them — a bottom bar on phones, a vertical bar beside the
+        // content on iPhone Duo's cover display.
+        TabView(selection: $tab) {
             HomeView()
                 .tabItem { Label("Train", systemImage: "flame.fill") }
+                .tag(Tab.train)
             HistoryView()
                 .tabItem { Label("History", systemImage: "chart.bar.fill") }
+                .tag(Tab.history)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                .tag(Tab.settings)
         }
         .sheet(isPresented: welcomeBinding) {
             WelcomeView()
@@ -99,8 +115,28 @@ struct WelcomeView: View {
     @State private var healthError: String? = nil
 
     var body: some View {
+        // Roomy screens get the centred layout; where it can't fit (a phone
+        // on its side, large text) the same content scrolls instead of
+        // pushing the buttons off the bottom.
+        ViewThatFits(in: .vertical) {
+            content
+            ScrollView {
+                content
+            }
+        }
+        .alert("Couldn't connect Apple Health", isPresented: Binding(
+            get: { healthError != nil },
+            set: { if !$0 { healthError = nil } })) {
+            Button("Continue without Health") { dismiss() }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(healthError ?? "")
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 28) {
-            Spacer()
+            Spacer(minLength: 0)
             Image(systemName: "flame.fill")
                 .font(.system(size: 52))
                 .foregroundStyle(Theme.accent)
@@ -115,7 +151,7 @@ struct WelcomeView: View {
                            text: "Finish strong and the next session steps up.")
             }
             .padding(.horizontal, 8)
-            Spacer()
+            Spacer(minLength: 0)
             Text("Not medical advice — check with a doctor before starting a new exercise program.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -160,14 +196,7 @@ struct WelcomeView: View {
             }
         }
         .padding(24)
-        .alert("Couldn't connect Apple Health", isPresented: Binding(
-            get: { healthError != nil },
-            set: { if !$0 { healthError = nil } })) {
-            Button("Continue without Health") { dismiss() }
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(healthError ?? "")
-        }
+        .readableWidth(520)
     }
 
     private func featureRow(icon: String, title: String, text: String) -> some View {

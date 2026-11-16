@@ -45,6 +45,7 @@ struct SummaryView: View {
                     }
                 }
                 .padding()
+                .readableWidth(640)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle(engine.endedEarly ? "Session ended" : "Nice work!")
@@ -339,6 +340,7 @@ struct CoachSheetView: View {
                             }
                         }
                         .padding()
+                        .readableWidth(680)
                     }
                     .onChange(of: bubbles.count) { _, _ in
                         if let last = bubbles.last {
@@ -352,7 +354,11 @@ struct CoachSheetView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("Done", systemImage: "checkmark")
+                    }
                 }
             }
         }
@@ -424,9 +430,11 @@ struct CoachSheetView: View {
                     .font(.title2)
             }
             .disabled(loading || input.trimmingCharacters(in: .whitespaces).isEmpty)
+            .accessibilityLabel("Send")
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
+        .readableWidth(680)
         .background(.bar)
     }
 
@@ -450,11 +458,23 @@ struct CoachSheetView: View {
             return
         }
         do {
-            let reply = try await CoachService.chat(provider: provider, apiKey: key, turns: turns)
+            // A model name typed into Settings is used as-is; otherwise the
+            // app may replace a model the provider has retired, and
+            // remembers the replacement so the next request goes straight
+            // to it.
+            let reply = try await CoachService.chat(
+                provider: provider,
+                apiKey: key,
+                turns: turns,
+                model: settings.coachModel(for: provider),
+                allowDiscovery: settings.coachModelOverride(for: provider) == nil)
+            if reply.discovered {
+                settings.value.coachAutoModels[provider.rawValue] = reply.model
+            }
             // Keep the raw reply (ACTION lines included) in the model-facing
             // history so the model remembers what it proposed.
-            turns.append(.init(role: .assistant, text: reply))
-            let parsed = CoachService.parseActions(from: reply)
+            turns.append(.init(role: .assistant, text: reply.text))
+            let parsed = CoachService.parseActions(from: reply.text)
             if !parsed.text.isEmpty {
                 bubbles.append(Bubble(fromCoach: true, text: parsed.text))
             }
@@ -472,8 +492,24 @@ struct CoachSheetView: View {
             guard let raw = action.equipment, let equipment = Equipment(rawValue: raw),
                   let delta = action.delta else { return }
             let progress = SessionSaver.fetchOrCreateProgress(for: equipment, context: context)
-            progress.level += Double(max(-2, min(2, delta)))
-            try? context.save()
+            let previous = progress.level
+            let level = max(ProgressionEngine.levelFloor, previous + Double(max(-2, min(2, delta))))
+            progress.level = level
+            do {
+                try context.save()
+            } catch {
+                // Nothing was stored — don't show "Applied" for a change
+                // that will be gone on the next launch.
+                context.rollback()
+                errorMessage = "Couldn't save that change. Please try again."
+                return
+            }
+            // Move the weekly-progression anchor by the same amount. The cap
+            // measures rises from that anchor, so leaving it behind made the
+            // next saved session pull an approved increase straight back.
+            if let anchor = settings.value.progressWeekAnchorLevels[raw] {
+                settings.value.progressWeekAnchorLevels[raw] = anchor + (level - previous)
+            }
         case "set_next_minutes":
             guard let minutes = action.minutes else { return }
             settings.value.coachRequestedMinutes = min(60, max(8, minutes))

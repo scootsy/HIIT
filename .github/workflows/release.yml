@@ -1,128 +1,396 @@
 name: Build & Release IPA
 
-# Two roles in one workflow:
-#  - pull_request: compile check, so Swift errors surface before merge
-#  - push to main (i.e. every merged PR): build + publish a GitHub release
-#    with the unsigned IPA attached
+# One workflow, three situations:
+#  - pull request:        compile + test, so problems surface before merge,
+#                         and preview what the install feed would contain
+#  - push to main         (every merged PR): build, publish a GitHub release
+#                         with the IPA, and update the SideStore /
+#                         LiveContainer source that points at it
+#  - run by hand:         the same checks on any branch, optionally with
+#                         simulator screenshots of every screen
+#
+# Keep this file's name: the build number comes from this workflow's run
+# counter, which restarts if the file is renamed.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      screenshots:
+        description: Photograph every screen on the iPhone Duo and iPhone simulators
+        type: boolean
+        default: false
 
-# Write access is granted only to the release job below — the compile job
-# (which also runs on PRs) needs nothing beyond read.
+# Write access is granted only to the release job below — everything that
+# runs on pull requests needs nothing beyond read.
 permissions:
   contents: read
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  # A newer push to a pull request replaces its older build; builds of main
+  # always finish, so no merge goes unreleased half-way.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IPA_NAME: HIIT-unsigned.ipa
+  # The branch the install feed (apps.json) is published on.
+  SOURCE_BRANCH: altstore
+  # iPhone Duo shows apps built with an older SDK letterboxed; 27.1 is the
+  # first SDK that gives an app the whole of both displays.
+  MIN_IOS_SDK: "27.1"
 
 jobs:
-  build:
-    runs-on: macos-15
+  tools:
+    name: Release tooling tests
+    runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Show Xcode version
-        run: xcodebuild -version
+      - name: Test the feed and IPA tools
+        run: python3 -m unittest discover -s scripts/tests -v
 
-      - name: Test workout generators
+  build:
+    name: Build IPA
+    # GitHub's Xcode 27 image: the iOS 27.1+ SDK and the iPhone Duo simulator.
+    runs-on: xcode-27
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Check the toolchain
         run: |
-          swiftc -o /tmp/generator-tests \
-            HIIT/Models/Equipment.swift \
-            HIIT/Models/WorkoutModels.swift \
-            HIIT/Engine/ProgressionEngine.swift \
-            HIIT/Engine/SpeedCalibration.swift \
-            HIIT/Engine/WorkoutGenerator.swift \
-            HIIT/Engine/EnduranceGenerator.swift \
-            HIIT/Engine/MetabolicMath.swift \
-            Tests/main.swift
-          /tmp/generator-tests
+          xcodebuild -version
+          SDK=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS SDK $SDK"
+          if [ "$(printf '%s\n%s\n' "$MIN_IOS_SDK" "$SDK" | sort -V | head -n 1)" != "$MIN_IOS_SDK" ]; then
+            echo "::error::This runner's iOS SDK is $SDK; $MIN_IOS_SDK or later is needed for a native iPhone Duo build."
+            exit 1
+          fi
 
-      # No signing in CI: a free Apple account can't mint distribution
-      # certificates, and sideloading tools (AltStore/SideStore/Sideloadly)
-      # re-sign the IPA with the installer's own Apple ID anyway.
-      - name: Build (unsigned, Release, device slice)
+      # SideStore decides whether an update exists by comparing
+      # MAJOR.MINOR.PATCH, so every build needs its own, increasing version:
+      # the project's MAJOR.MINOR plus one more than the newest release tag.
+      # The build number is this workflow's run number.
+      - name: Choose the version
+        id: version
         run: |
+          BASE=$(sed -n 's/.*MARKETING_VERSION = \([0-9][0-9.]*\);.*/\1/p' HIIT.xcodeproj/project.pbxproj | head -n 1)
+          SERIES=$(printf '%s' "${BASE:-1.0}" | awk -F. '{ printf "%d.%d", $1, $2 }')
+          LAST=$(git ls-remote --tags origin "refs/tags/v${SERIES}.*" \
+            | sed -n 's#.*refs/tags/v[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\)$#\1#p' \
+            | sort -n | tail -n 1)
+          VERSION="${SERIES}.$(( ${LAST:-0} + 1 ))"
+          BUILD="${GITHUB_RUN_NUMBER}"
+          echo "Version $VERSION (build $BUILD); newest existing tag in the $SERIES series: ${LAST:-none}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD=$BUILD" >> "$GITHUB_ENV"
+
+      - name: Test the workout logic
+        run: ./Tests/run.sh
+
+      # No signing identity in CI: a free Apple account can't mint
+      # distribution certificates, and sideloading tools (SideStore,
+      # AltStore, Sideloadly) re-sign the IPA with the installer's own Apple
+      # ID anyway.
+      - name: Build (Release, device)
+        run: |
+          set -o pipefail
+          mkdir -p build
           xcodebuild \
             -project HIIT.xcodeproj \
             -scheme HIIT \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee build/xcodebuild.log | (xcbeautify --quiet || cat)
+
+      - name: Show compiler errors
+        if: failure()
+        run: |
+          if [ -f build/xcodebuild.log ]; then
+            echo "Errors from the build log:"
+            grep -E "(error|fatal error):" build/xcodebuild.log | sort -u | head -n 200 || true
+          fi
 
       # Ad-hoc sign so the HealthKit entitlement is embedded in the binary's
-      # signature. Without this, re-signing tools (AltStore/SideStore/
-      # Sideloadly) see no entitlements and iOS silently refuses to show the
-      # Health permission sheet after install.
+      # signature. Without this, re-signing tools see no entitlements and
+      # iOS silently refuses to show the Health permission sheet after
+      # install. Nested code is signed first, then the app that contains it.
       - name: Ad-hoc sign with entitlements
         run: |
-          APP_PATH="build/Build/Products/Release-iphoneos/HIIT.app"
-          codesign --force --sign - \
-            --entitlements HIIT/HIIT.entitlements \
-            "$APP_PATH"
-          codesign --display --entitlements - "$APP_PATH"
+          APP="build/Build/Products/Release-iphoneos/HIIT.app"
+          test -d "$APP"
+          for EXTENSION in "$APP"/PlugIns/*.appex; do
+            if [ -d "$EXTENSION" ]; then codesign --force --sign - "$EXTENSION"; fi
+          done
+          codesign --force --sign - --entitlements HIIT/HIIT.entitlements "$APP"
+          codesign --verify --verbose "$APP"
+          codesign -d --entitlements app-entitlements.plist --xml "$APP"
+          echo "Entitlements in the signature:"
+          plutil -p app-entitlements.plist
+          echo "Info.plist:"
+          plutil -p "$APP/Info.plist"
 
-      - name: Package unsigned IPA
+      - name: Package the IPA
         run: |
-          APP_PATH="build/Build/Products/Release-iphoneos/HIIT.app"
-          test -d "$APP_PATH"
+          APP="build/Build/Products/Release-iphoneos/HIIT.app"
+          rm -rf Payload
           mkdir Payload
-          cp -R "$APP_PATH" Payload/
-          zip -qry HIIT-unsigned.ipa Payload
+          cp -R "$APP" Payload/
+          zip -qry "$IPA_NAME" Payload
 
-      - name: Upload IPA as workflow artifact
-        uses: actions/upload-artifact@v4
+      # Reads the version, build, size and checksum back out of the IPA that
+      # was just made — the feed is assembled from this file, never from
+      # what the build was *supposed* to be — and fails here if the build
+      # isn't the one intended (wrong version stamp, old SDK, missing
+      # orientations).
+      - name: Describe the IPA
+        run: |
+          python3 scripts/ipa_info.py "$IPA_NAME" \
+            --entitlements app-entitlements.plist \
+            --expect-version "$VERSION" \
+            --expect-build "$BUILD" \
+            --min-sdk "$MIN_IOS_SDK" \
+            --require-all-orientations \
+            --output release.json
+          cat release.json
+
+      - name: Upload the IPA
+        uses: actions/upload-artifact@v7
         with:
-          name: HIIT-unsigned-ipa
-          path: HIIT-unsigned.ipa
+          name: HIIT-ipa
+          path: |
+            ${{ env.IPA_NAME }}
+            release.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # Pull requests and manual runs: assemble the install feed as it would
+  # read after this build is released, check an installer could load it, and
+  # print it. Publishes nothing.
+  feed-preview:
+    name: Install feed preview
+    if: github.event_name != 'push'
+    needs: [build, tools]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Download the IPA description
+        uses: actions/download-artifact@v8
+        with:
+          name: HIIT-ipa
+          path: artifact
+
+      - name: Build the feed as it would be published
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp > releases.json
+          gh api "repos/$GITHUB_REPOSITORY/contents/apps.json?ref=$SOURCE_BRANCH" \
+            -H "Accept: application/vnd.github.raw" > existing.json 2>/dev/null || rm -f existing.json
+          python3 scripts/build_source.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "$SOURCE_BRANCH" \
+            --releases releases.json \
+            --existing existing.json \
+            --fetch \
+            --pending artifact/release.json \
+            --pending-tag "v$VERSION" \
+            --pending-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --pending-notes "Preview of this change." \
+            --pending-ipa-name "$IPA_NAME" \
+            --output apps.preview.json
+          echo "----- apps.json preview -----"
+          cat apps.preview.json
+
+      - name: Upload the preview
+        uses: actions/upload-artifact@v7
+        with:
+          name: feed-preview
+          path: apps.preview.json
+          retention-days: 14
+
+  # Optional, manual runs only: build the Debug app, open every screen in
+  # its demo mode on the iPhone Duo and iPhone simulators, and save the
+  # pictures as an artifact. See scripts/screenshots.sh.
+  screenshots:
+    name: Simulator screenshots
+    if: github.event_name == 'workflow_dispatch' && inputs.screenshots
+    needs: build
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Photograph every screen
+        run: ./scripts/screenshots.sh screenshots
+
+      - name: Upload the screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots
+          path: screenshots
+          if-no-files-found: warn
+          retention-days: 14
 
   # Publishing is a separate job so the write token never reaches the build
-  # steps, and it is gated to pushes of main — a manual dispatch from a side
+  # steps, and it is gated to pushes of main — a manual run from a side
   # branch must not publish unreviewed code as the latest release.
   release:
+    name: Publish release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build, tools]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # One publish at a time, so two quick merges can't interleave their
+    # updates to the feed.
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+      BUILD: ${{ needs.build.outputs.build }}
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Download IPA artifact
-        uses: actions/download-artifact@v4
+      - name: Download the IPA
+        uses: actions/download-artifact@v8
         with:
-          name: HIIT-unsigned-ipa
+          name: HIIT-ipa
 
-      - name: Create GitHub release
+      - name: Work out the source address
+        run: echo "SOURCE_URL=https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$SOURCE_BRANCH/apps.json" >> "$GITHUB_ENV"
+
+      # "What changed" is the merged pull request's title (or the commit
+      # subject for a direct push). Everything after the marker line is
+      # install boilerplate, which the feed leaves out of its update notes.
+      - name: Write the release notes
         env:
-          GH_TOKEN: ${{ github.token }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
-          VERSION=$(sed -n 's/.*MARKETING_VERSION = \([0-9][0-9.]*\);.*/\1/p' HIIT.xcodeproj/project.pbxproj | head -1)
-          TAG="v${VERSION:-1.0}.${{ github.run_number }}"
-          cat > release-notes.md <<'NOTES'
-          iOS build (ad-hoc signed, HealthKit entitlement embedded), packaged automatically from the latest merge to `main`.
+          SUBJECT=$(printf '%s\n' "$HEAD_MESSAGE" | head -n 1)
+          REST=$(printf '%s\n' "$HEAD_MESSAGE" | tail -n +2 | sed '/^[[:space:]]*$/d' | head -n 1)
+          case "$SUBJECT" in
+            "Merge pull request #"*)
+              NUMBER=$(printf '%s' "$SUBJECT" | sed -n 's/^Merge pull request #\([0-9][0-9]*\).*/\1/p')
+              CHANGED="${REST:-$SUBJECT} (#$NUMBER)"
+              ;;
+            *)
+              CHANGED="$SUBJECT"
+              ;;
+          esac
+          {
+            printf '%s\n\n' "${CHANGED:-Maintenance build.}"
+            printf '%s\n' '<!-- install -->'
+            printf '%s\n\n' '---'
+            printf '%s\n\n' "**Version $VERSION (build $BUILD)** — iOS 17 or later, laid out for iPhone Duo."
+            printf '%s\n\n' "**Get updates automatically.** Add this source once in SideStore or LiveContainer and new versions show up on their own:"
+            printf '%s\n\n' "\`$SOURCE_URL\`"
+            printf '%s\n\n' "**Or install this build by hand.** Download \`$IPA_NAME\` below and open it with SideStore, AltStore or Sideloadly — it is re-signed with your Apple ID. Keep the HealthKit entitlement if the tool asks."
+            printf '%s\n\n' "**If the Apple Health permission sheet never appears** after tapping Connect, the signing tool stripped the HealthKit entitlement — the app will say so. Live heart rate from a Bluetooth strap still works; reinstalling with HealthKit kept (or from Xcode) restores Health."
+            printf '%s\n' "Free Apple IDs: sideloaded apps expire after 7 days — SideStore refreshes them for you."
+          } > release-notes.md
+          cat release-notes.md
 
-          **Install (sideload):**
-          - **AltStore / SideStore** — add this IPA; it is re-signed with your Apple ID automatically.
-          - **Sideloadly** — drag the IPA in and sign with your Apple ID (keep the HealthKit entitlement enabled).
-          - Or clone the repo and run from Xcode.
-
-          **If the Apple Health permission sheet never appears** after tapping Connect, your signing tool stripped the HealthKit entitlement during re-signing — the app will tell you so. Reinstall via Xcode (always works) or re-sign with HealthKit kept.
-
-          Free Apple IDs: sideloaded apps expire after 7 days — reinstall to refresh. Requires iOS 17+.
-          NOTES
-          gh release create "$TAG" HIIT-unsigned.ipa \
-            --title "HIIT Coach $TAG" \
-            --target "${{ github.sha }}" \
+      - name: Create the GitHub release
+        run: |
+          gh release create "v$VERSION" "$IPA_NAME" release.json \
+            --title "HIIT Coach $VERSION" \
+            --target "$GITHUB_SHA" \
             --notes-file release-notes.md \
             --latest
+
+      # The feed lives on its own branch so main's history stays free of
+      # generated commits. It is rebuilt from the releases themselves: a
+      # deleted release drops out, an edited one is picked up.
+      - name: Update the SideStore / LiveContainer source
+        run: |
+          # The release just created can take a moment to appear in the list.
+          for ATTEMPT in 1 2 3 4 5 6; do
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate --slurp > releases.json
+            if grep -q "\"tag_name\": *\"v$VERSION\"" releases.json; then break; fi
+            echo "v$VERSION not listed yet (attempt $ATTEMPT)"; sleep 5
+          done
+
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$REMOTE" "$SOURCE_BRANCH" > /dev/null 2>&1; then
+            git clone --quiet --depth 1 --branch "$SOURCE_BRANCH" "$REMOTE" site
+          else
+            mkdir site
+            git -C site init --quiet
+            git -C site checkout --quiet --orphan "$SOURCE_BRANCH"
+            git -C site remote add origin "$REMOTE"
+          fi
+
+          python3 scripts/build_source.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "$SOURCE_BRANCH" \
+            --releases releases.json \
+            --existing site/apps.json \
+            --fetch \
+            --output site/apps.json
+
+          cp HIIT/Assets.xcassets/AppIcon.appiconset/AppIcon.png site/icon.png
+          {
+            printf '%s\n\n' "# HIIT Coach — install source"
+            printf '%s\n\n' "This branch is written by the \`Build & Release IPA\` workflow. Don't edit it by hand; every release regenerates it from the repository's releases."
+            printf '%s\n\n' "Add this URL as a source in SideStore or LiveContainer:"
+            printf '%s\n' "\`$SOURCE_URL\`"
+          } > site/README.md
+
+          cd site
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The feed is already up to date."
+          else
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit --quiet -m "Publish $VERSION"
+            git push --quiet origin "HEAD:refs/heads/$SOURCE_BRANCH"
+            echo "Published the feed for $VERSION."
+          fi
+
+      - name: Summary
+        env:
+          REPO_IS_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          {
+            echo "## HIIT Coach $VERSION (build $BUILD)"
+            echo
+            echo "Released: https://github.com/$GITHUB_REPOSITORY/releases/tag/v$VERSION"
+            echo
+            echo "Install source for SideStore and LiveContainer:"
+            echo
+            echo "\`$SOURCE_URL\`"
+            if [ "$REPO_IS_PRIVATE" = "true" ]; then
+              echo
+              echo "> **This repository is private, so that address is not reachable from a phone yet.**"
+              echo "> SideStore and LiveContainer download the feed and the IPA without signing in, which only works for a public repository."
+              echo "> Make the repository public (Settings → General → Danger Zone → Change visibility) and the source works as it stands — nothing needs rebuilding."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$REPO_IS_PRIVATE" = "true" ]; then
+            echo "::warning::The repository is private, so SideStore and LiveContainer cannot download the feed or the IPA until it is made public."
+          fi

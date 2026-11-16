@@ -908,3 +908,91 @@ final class WorkoutEngine {
             endedEarly: endedEarly)
     }
 }
+
+#if DEBUG
+// MARK: - Frozen states for previews
+
+/// Debug builds only. Puts the engine into a still, mid-session state so a
+/// screen can be laid out and photographed without running a workout: no
+/// timer, no audio session, no haptics, nothing written to disk. Used by the
+/// launch-argument demo mode (Support/DemoMode.swift) that the CI screenshot
+/// job drives.
+extension WorkoutEngine {
+
+    /// Freezes the session partway through `phase`, with `remaining` seconds
+    /// left in it. Earlier phases count as run in full; `heartRates` become
+    /// an evenly spaced trace across the elapsed time.
+    func debugFreeze(phase target: Int,
+                     remaining: Double,
+                     heartRates: [Double] = [],
+                     paused: Bool = false,
+                     overtime: Double? = nil,
+                     suggestion: LiveCoach.Suggestion? = nil,
+                     coachLine: String = "") {
+        soundOn = false
+        hapticsOn = false
+        spokenCuesOn = false
+
+        let index = max(0, min(target, plan.phases.count - 1))
+        var before = 0.0
+        for earlier in 0..<index {
+            actualSeconds[earlier] = plan.phases[earlier].seconds
+            before += plan.phases[earlier].seconds
+        }
+        let length = plan.phases[index].seconds
+        let elapsed = max(0, min(length, length - remaining))
+        let now = Date()
+
+        phaseIndex = index
+        phaseElapsed = elapsed
+        phaseStart = now.addingTimeInterval(-elapsed)
+        startDate = now.addingTimeInterval(-(before + elapsed))
+        inOvertime = false
+        overtimeSeconds = 0
+        if let overtime {
+            inOvertime = true
+            overtimeSeconds = overtime
+            phaseElapsed = length + overtime
+        }
+        state = paused ? .paused : .running
+
+        if !heartRates.isEmpty {
+            let span = max(1, before + elapsed)
+            let step = span / Double(heartRates.count)
+            hrHistory = heartRates.enumerated().map { offset, bpm in
+                HRSample(date: startDate.addingTimeInterval(Double(offset) * step), bpm: bpm)
+            }
+            latestHR = heartRates.last
+            // Far enough ahead that a still preview never reads as stale.
+            latestHRDate = now.addingTimeInterval(3600)
+            maxObservedHR = heartRates.max()
+            hrSum = heartRates.reduce(0, +)
+            hrCount = Double(heartRates.count)
+        }
+        liveSuggestion = suggestion
+        coachMessage = coachLine
+    }
+
+    /// Freezes the session as finished, with the heart-rate bookkeeping the
+    /// summary's objective grades are computed from.
+    func debugFinish(heartRates: [Double]) {
+        debugFreeze(phase: plan.phases.count - 1, remaining: 0, heartRates: heartRates)
+        actualSeconds = plan.phases.map(\.seconds)
+        let workSeconds = plan.phases.filter { $0.kind == .work }.reduce(0) { $0 + $1.seconds }
+        workHRSeconds = workSeconds
+        workHRSecondsAtIntensity = workSeconds * 0.8
+        sessionSecondsAtFloor = min(workSeconds * 0.85, 540)
+        sessionSecondsAt90 = workSeconds * 0.2
+        for (index, phase) in plan.phases.enumerated() where phase.kind == .work {
+            workPhaseHadHR[index] = true
+            workPhaseHitBand[index] = index % 5 != 0
+        }
+        workHRSum = 166 * 40
+        workHRCount = 40
+        hrRecovery = 27
+        endDate = Date()
+        endedEarly = false
+        state = .finished
+    }
+}
+#endif

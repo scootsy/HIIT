@@ -8,8 +8,10 @@ import Foundation
 /// ordinary override machinery (clamping, later-phase propagation, and
 /// next-session progression credit) unchanged.
 ///
-/// Foreground-only by the same design as the rest of the live session: the
-/// engine tick that drives evaluation stops while the app is suspended.
+/// Evaluation rides the engine tick, so it runs wherever the session does —
+/// on screen, or in the background while the workout's audio session keeps
+/// the app alive (suggestions then surface on the lock screen). It simply
+/// stops for as long as iOS has the app suspended.
 final class LiveCoach {
 
     struct Suggestion: Identifiable, Equatable {

@@ -33,12 +33,27 @@ struct HIITApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(storeLoadFailed: storeLoadFailed)
-                .environment(settings)
-                .environment(health)
-                .environment(ble)
-                .tint(Theme.accent)
+            #if DEBUG
+            // Debug builds can open straight onto one screen with sample
+            // data (see Support/DemoMode.swift) — how CI photographs the
+            // layouts on simulated devices.
+            if let demo = DemoMode.current {
+                DemoRootView(demo: demo)
+            } else {
+                appRoot
+            }
+            #else
+            appRoot
+            #endif
         }
         .modelContainer(container)
+    }
+
+    private var appRoot: some View {
+        RootView(storeLoadFailed: storeLoadFailed)
+            .environment(settings)
+            .environment(health)
+            .environment(ble)
+            .tint(Theme.accent)
     }
 }
