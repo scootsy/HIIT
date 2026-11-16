@@ -1,12 +1,5 @@
 import Foundation
 
-private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
-    guard condition() else {
-        fputs("FAIL: \(message)\n", stderr)
-        exit(1)
-    }
-}
-
 private let machines: [Equipment: MachineProfile] = [
     .treadmill: MachineProfile(maxSpeedMph: 6, hasIncline: true, maxInclinePercent: 8,
                                maxResistance: 0, cueLeadSeconds: 10),
@@ -117,3 +110,7 @@ let decoded = try JSONDecoder().decode(WorkoutPlan.self, from: legacyData)
 expect(decoded.effectiveMode == .intervals, "legacy checkpoints must remain interval workouts")
 
 print("Compatibility checks passed")
+
+runProgressionTests()
+runCoachModelTests()
+runLayoutTests()

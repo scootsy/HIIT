@@ -1,0 +1,19 @@
+{
+  "source": {
+    "name": "HIIT Coach",
+    "identifier": "com.scootsy.HIIT.source",
+    "subtitle": "Every build of HIIT Coach, straight from the repository",
+    "description": "Automatic builds of HIIT Coach. A new version appears here each time a change is merged, so SideStore can offer the update and LiveContainer always installs the latest build.",
+    "tintColor": "FF5F44"
+  },
+  "app": {
+    "bundleIdentifier": "com.scootsy.HIIT",
+    "name": "HIIT Coach",
+    "developerName": "scootsy",
+    "subtitle": "Interval and endurance coaching built around you",
+    "localizedDescription": "HIIT Coach builds interval and endurance workouts around your equipment, your level and your time, guides you through them live, and steps the targets up as you get fitter.\n\n• Treadmill, stationary bike or outdoors, with every target clamped to what your machine can do\n• Research-based protocols: classic intervals, Norwegian 4×4, 10-20-30, pyramids, hill climbs\n• Early warnings before each step up, spoken cues, and a Live Activity with lock-screen controls\n• Live heart rate from any Bluetooth strap or an Apple Watch, with one-tap coaching suggestions\n• Sessions graded against their training objectives, with history and trends\n• Laid out for iPhone Duo: closed, open, and folded\n\nNo accounts, no subscriptions, no servers — everything stays on your phone.",
+    "category": "lifestyle",
+    "tintColor": "FF5F44"
+  },
+  "maxVersions": 20
+}

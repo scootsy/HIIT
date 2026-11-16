@@ -62,32 +62,21 @@ enum SessionSaver {
                 note: "Endurance work builds your base without making the next interval session harder.")
         }
 
-        // Weekly progression cap: net +1 level (+0.2 mph work speed) per
-        // rolling 7 days, however comfortable the sessions felt. Uncapped
-        // compounding allowed ~+0.6 mph a week — the classic overuse-injury
-        // setup, and RPE can't catch it because comfort is the trigger.
-        // The anchor is a high-water mark (when the level last rose, and to
-        // what) whose +1 headroom refills continuously over 7 days — a
-        // tumbling window would allow +2 within hours across its boundary.
+        // Weekly progression cap (see ProgressionEngine.applyWeeklyCap): net
+        // +1 level per rolling 7 days, measured from a high-water-mark anchor.
         // Anchors live in settings so the SwiftData schema stays put; they
         // are written only after the save commits (below).
         let equipKey = result.plan.equipment.rawValue
-        var anchorDate = settings.value.progressWeekAnchorDates[equipKey]
-            ?? result.endDate.addingTimeInterval(-7 * 86400)
-        var anchorLevel = settings.value.progressWeekAnchorLevels[equipKey] ?? baseLevel
-        var anchorNeedsWrite = false
-        var cappedLevel = update.newLevel
-        var cappedNote: String? = nil
-        let refill = min(1, max(0, result.endDate.timeIntervalSince(anchorDate)) / (7 * 86400))
-        if cappedLevel > anchorLevel + refill {
-            cappedLevel = anchorLevel + refill
-            cappedNote = "Strong week — the targets hold here for a few days. Fitness likes the climb slow."
-        }
-        if cappedLevel > anchorLevel {
-            anchorDate = result.endDate
-            anchorLevel = cappedLevel
-            anchorNeedsWrite = true
-        }
+        let cap = ProgressionEngine.applyWeeklyCap(
+            proposed: update.newLevel,
+            base: baseLevel,
+            anchorLevel: settings.value.progressWeekAnchorLevels[equipKey],
+            anchorDate: settings.value.progressWeekAnchorDates[equipKey],
+            now: result.endDate)
+        let cappedLevel = cap.level
+        let cappedNote: String? = cap.wasCapped
+            ? "Strong week — the targets hold here for a few days. Fitness likes the climb slow."
+            : nil
 
         let declined = cappedLevel < baseLevel
         progress.level = cappedLevel
@@ -149,9 +138,9 @@ enum SessionSaver {
         // Settings writes happen only after the durable save: the weekly-cap
         // anchor for this equipment, and — on a tier change — the same
         // rebasing the equipment levels just got, so the cap stays aligned.
-        if anchorNeedsWrite {
-            settings.value.progressWeekAnchorDates[equipKey] = anchorDate
-            settings.value.progressWeekAnchorLevels[equipKey] = anchorLevel
+        if cap.anchorMoved {
+            settings.value.progressWeekAnchorDates[equipKey] = cap.anchorDate
+            settings.value.progressWeekAnchorLevels[equipKey] = cap.anchorLevel
         }
         if let tierDelta {
             for key in settings.value.progressWeekAnchorLevels.keys {

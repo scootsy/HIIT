@@ -35,6 +35,12 @@ struct AppSettings: Codable {
     /// speed→heart-rate calibration the generator leans on once enough
     /// sessions with live HR have accumulated.
     var speedCalibrationPoints: [String: [SpeedCalibration.Point]] = [:]
+    /// AI-coach model names the user typed in, keyed by provider raw value.
+    /// Blank or missing means "let the app choose".
+    var coachModelOverrides: [String: String] = [:]
+    /// Models the app found for itself after a provider retired the
+    /// built-in default (see CoachModelCatalog), keyed by provider raw value.
+    var coachAutoModels: [String: String] = [:]
 
     init() {}
 
@@ -67,6 +73,8 @@ struct AppSettings: Codable {
         progressWeekAnchorLevels = (try? c.decodeIfPresent([String: Double].self, forKey: .progressWeekAnchorLevels)) ?? [:]
         coachRequestedMinutes = try? c.decodeIfPresent(Int.self, forKey: .coachRequestedMinutes)
         speedCalibrationPoints = (try? c.decodeIfPresent([String: [SpeedCalibration.Point]].self, forKey: .speedCalibrationPoints)) ?? [:]
+        coachModelOverrides = (try? c.decodeIfPresent([String: String].self, forKey: .coachModelOverrides)) ?? [:]
+        coachAutoModels = (try? c.decodeIfPresent([String: String].self, forKey: .coachAutoModels)) ?? [:]
     }
 }
 
@@ -74,11 +82,23 @@ struct AppSettings: Codable {
 final class SettingsStore {
     private static let key = "hiit.settings.v1"
 
+    /// False for stores that must never touch UserDefaults (previews and the
+    /// debug demo mode).
+    @ObservationIgnored private let persists: Bool
+
     var value: AppSettings {
-        didSet { persist() }
+        didSet { if persists { persist() } }
+    }
+
+    /// A store that lives only in memory: nothing is read from or written to
+    /// UserDefaults.
+    init(ephemeral value: AppSettings) {
+        persists = false
+        self.value = value
     }
 
     init() {
+        persists = true
         if let data = UserDefaults.standard.data(forKey: Self.key) {
             if let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) {
                 value = decoded
@@ -107,6 +127,18 @@ final class SettingsStore {
     var coachProvider: CoachProvider {
         get { CoachProvider(rawValue: value.coachProviderRaw) ?? .anthropic }
         set { value.coachProviderRaw = newValue.rawValue }
+    }
+
+    /// The model name the user set for a provider, or nil for automatic.
+    func coachModelOverride(for provider: CoachProvider) -> String? {
+        CoachModelCatalog.cleaned(value.coachModelOverrides[provider.rawValue])
+    }
+
+    /// The model the coach's next request to `provider` will name.
+    func coachModel(for provider: CoachProvider) -> String {
+        CoachModelCatalog.resolve(provider: provider,
+                                  override: value.coachModelOverrides[provider.rawValue],
+                                  remembered: value.coachAutoModels[provider.rawValue])
     }
 
     /// Tanaka et al. (2001): HRmax = 208 − 0.7 × age. More accurate than 220 − age.

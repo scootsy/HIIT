@@ -14,6 +14,11 @@ enum ProgressionEngine {
     static let speedPerLevelMph = 0.2
     static let resistanceFractionPerLevel = 0.015
 
+    /// The lowest a progression level can be pushed — by a run of unfinished
+    /// sessions or by an AI-coach "ease off" the user approved. Below this
+    /// the tier itself steps down instead (see `tierChange`).
+    static let levelFloor = -3.0
+
     struct Update {
         var newLevel: Double
         var note: String
@@ -24,7 +29,7 @@ enum ProgressionEngine {
         var note: String
 
         if completionRatio < 0.8 {
-            level = max(-3, level - 0.5)
+            level = max(levelFloor, level - 0.5)
             note = "We'll ease the targets a touch next time so you can finish strong."
         } else if let rpe {
             switch rpe {
@@ -57,7 +62,7 @@ enum ProgressionEngine {
             level += override
             note = "You ran ahead of the targets today — next session starts where you actually trained."
         } else if override < -0.2 {
-            level = max(-3, level + override)
+            level = max(levelFloor, level + override)
             note = "You dialed it back mid-session, so next time starts at the pace you actually held."
         }
 
@@ -67,6 +72,60 @@ enum ProgressionEngine {
         }
 
         return Update(newLevel: level, note: note)
+    }
+
+    // MARK: - Weekly cap
+
+    /// Weekly progression cap: net +1 level (+0.2 mph of work speed) per
+    /// rolling 7 days, however comfortable the sessions felt. Uncapped
+    /// compounding allowed ~+0.6 mph a week — the classic overuse-injury
+    /// setup, and RPE can't catch it because comfort is the trigger.
+    static let weeklyCapLevels = 1.0
+    static let weeklyCapWindow: TimeInterval = 7 * 86400
+
+    struct CappedLevel: Equatable {
+        var level: Double
+        /// True when the cap held the level below what the session earned.
+        var wasCapped: Bool
+        /// The high-water mark to persist: when the level last rose, and to
+        /// what. Unchanged unless `anchorMoved`.
+        var anchorLevel: Double
+        var anchorDate: Date
+        var anchorMoved: Bool
+    }
+
+    /// Applies the cap to a session's proposed level. The anchor is a
+    /// high-water mark whose +1 headroom refills continuously over 7 days —
+    /// a tumbling window would allow +2 within hours across its boundary.
+    ///
+    /// The cap limits *rises* only. Its ceiling never sits below `base` (the
+    /// level the session started from), so a level that was legitimately
+    /// moved above the anchor since the last save — the user approving an
+    /// AI-coach increase, say — is held, never pulled back down and reported
+    /// as a "strong week".
+    static func applyWeeklyCap(proposed: Double,
+                               base: Double,
+                               anchorLevel: Double?,
+                               anchorDate: Date?,
+                               now: Date) -> CappedLevel {
+        let anchorDate = anchorDate ?? now.addingTimeInterval(-weeklyCapWindow)
+        let anchorLevel = anchorLevel ?? base
+        let elapsed = max(0, now.timeIntervalSince(anchorDate))
+        let refill = min(weeklyCapLevels, elapsed / weeklyCapWindow * weeklyCapLevels)
+        let ceiling = max(anchorLevel + refill, base)
+
+        var level = proposed
+        var capped = false
+        if level > ceiling {
+            level = ceiling
+            capped = true
+        }
+        if level > anchorLevel {
+            return CappedLevel(level: level, wasCapped: capped,
+                               anchorLevel: level, anchorDate: now, anchorMoved: true)
+        }
+        return CappedLevel(level: level, wasCapped: capped,
+                           anchorLevel: anchorLevel, anchorDate: anchorDate, anchorMoved: false)
     }
 
     /// Experience promotes/demotes itself from sustained performance.
@@ -92,7 +151,7 @@ enum ProgressionEngine {
         // -tierLevelSpan, which can park a lightly-trained machine below the
         // threshold — without this gate, the very next session on it would
         // demote the tier and the promotion/demotion would ping-pong forever.
-        if declined && progressLevel <= -3 {
+        if declined && progressLevel <= levelFloor {
             switch experience {
             case .beginner:
                 return nil
