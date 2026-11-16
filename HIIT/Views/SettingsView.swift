@@ -9,6 +9,7 @@ struct SettingsView: View {
     @Environment(SettingsStore.self) private var settings
     @Environment(HealthKitManager.self) private var health
     @State private var apiKey = ""
+    @State private var coachModel = ""
     @State private var keyLoaded = false
     @State private var keySaveResult: Bool? = nil
     @State private var refreshing = false
@@ -80,10 +81,28 @@ struct SettingsView: View {
                             provider: settings.coachProvider)
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { keySaveResult = nil }
                     }
+                    // Providers retire models on their own schedule. Left
+                    // blank, the app uses its built-in choice and finds a
+                    // current one by itself if that is ever switched off;
+                    // this field is for people who want a specific model.
+                    TextField("Model (optional)", text: $coachModel)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: coachModel) { _, newValue in
+                            let provider = settings.coachProvider.rawValue
+                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let stored = settings.value.coachModelOverrides[provider] ?? ""
+                            guard trimmed != stored else { return }
+                            if trimmed.isEmpty {
+                                settings.value.coachModelOverrides.removeValue(forKey: provider)
+                            } else {
+                                settings.value.coachModelOverrides[provider] = trimmed
+                            }
+                        }
                 } header: {
                     Text("AI Coach (optional)")
                 } footer: {
-                    Text("Each key stays in the device Keychain and is sent only to \(settings.coachProvider.label). Coach requests include your profile numbers (age, weight, resting HR), experience level, recent session stats, and your workout notes. Get a key at \(settings.coachProvider.consoleName).")
+                    Text("Each key stays in the device Keychain and is sent only to \(settings.coachProvider.label). Coach requests include your profile numbers (age, weight, resting HR), experience level, recent session stats, and your workout notes. Get a key at \(settings.coachProvider.consoleName).\n\nModel in use: \(settings.coachModel(for: settings.coachProvider)). Leave Model blank to let the app choose — it switches by itself if \(settings.coachProvider.label) retires this one.")
                 }
 
                 Section {
@@ -105,6 +124,7 @@ struct SettingsView: View {
                 guard !keyLoaded else { return }
                 keyLoaded = true
                 apiKey = KeychainHelper.load(provider: settings.coachProvider) ?? ""
+                coachModel = settings.value.coachModelOverrides[settings.coachProvider.rawValue] ?? ""
             }
             .sheet(item: $editingField) { field in
                 profileEditor(for: field)
@@ -300,6 +320,7 @@ struct SettingsView: View {
             set: { provider in
                 settings.coachProvider = provider
                 apiKey = KeychainHelper.load(provider: provider) ?? ""
+                coachModel = settings.value.coachModelOverrides[provider.rawValue] ?? ""
                 keySaveResult = nil
             })
     }
@@ -332,9 +353,11 @@ struct NumberPickerSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button {
                         onSave(selection)
                         dismiss()
+                    } label: {
+                        Label("Done", systemImage: "checkmark")
                     }
                 }
             }
@@ -373,7 +396,11 @@ struct MaxHRSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("Done", systemImage: "checkmark")
+                    }
                 }
             }
         }
@@ -449,6 +476,7 @@ struct ScienceView: View {
                         "• Helgerud J. et al., Med Sci Sports Exerc, 2007 — aerobic high-intensity intervals improve VO₂max.\n• Gunnarsson T.P. & Bangsbo J., J Appl Physiol, 2012 — the 10-20-30 training concept.\n• Tanaka H. et al., J Am Coll Cardiol, 2001 — age-predicted maximal heart rate revisited.\n• Cole C.R. et al., N Engl J Med, 1999 — heart-rate recovery after exercise as a predictor.\n• ACSM's Guidelines for Exercise Testing and Prescription — interval progression and metabolic equations.")
             }
             .padding()
+            .readableWidth(680)
         }
         .navigationTitle("The science")
         .navigationBarTitleDisplayMode(.inline)

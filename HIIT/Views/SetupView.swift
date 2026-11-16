@@ -10,6 +10,11 @@ struct SetupView: View {
     enum Step { case purpose, equipment, machine, suggestion }
 
     let onStart: (WorkoutPlan) -> Void
+    #if DEBUG
+    /// Demo mode (Support/DemoMode.swift) opens straight onto the suggested
+    /// workout for this equipment.
+    var demoEquipment: Equipment? = nil
+    #endif
 
     @Environment(SettingsStore.self) private var settings
     @Environment(\.modelContext) private var context
@@ -52,13 +57,24 @@ struct SetupView: View {
             .navigationTitle(stepTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Each item carries a title and an icon: iPhone Duo stacks
+                // bar buttons vertically beside the content when closed, and
+                // only items with an icon can go there.
                 ToolbarItem(placement: .topBarLeading) {
                     if step != .purpose {
-                        Button("Back") { goBack() }
+                        Button {
+                            goBack()
+                        } label: {
+                            Label("Back", systemImage: "chevron.backward")
+                        }
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cancel") { dismiss() }
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("Cancel", systemImage: "xmark")
+                    }
                 }
             }
         }
@@ -67,6 +83,13 @@ struct SetupView: View {
             if let raw = settings.value.lastEquipmentRaw, let saved = Equipment(rawValue: raw) {
                 equipment = saved
             }
+            #if DEBUG
+            if let demoEquipment, step == .purpose {
+                equipment = demoEquipment
+                machine = settings.machine(for: demoEquipment)
+                enterSuggestion()
+            }
+            #endif
         }
     }
 
@@ -124,6 +147,7 @@ struct SetupView: View {
                     .padding(.top, 8)
             }
             .padding()
+            .readableWidth()
         }
         .background(Color(.systemGroupedBackground))
     }
@@ -167,6 +191,7 @@ struct SetupView: View {
                 }
             }
             .padding()
+            .readableWidth()
         }
         .background(Color(.systemGroupedBackground))
     }
@@ -299,6 +324,7 @@ struct SetupView: View {
                         .buttonStyle(.plain)
                     }
                     .padding()
+                    .readableWidth()
                 }
                 .background(Color(.systemGroupedBackground))
             } else {

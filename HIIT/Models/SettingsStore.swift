@@ -84,7 +84,7 @@ final class SettingsStore {
 
     /// False for stores that must never touch UserDefaults (previews and the
     /// debug demo mode).
-    @ObservationIgnored private let persists: Bool
+    private let persists: Bool
 
     var value: AppSettings {
         didSet { if persists { persist() } }

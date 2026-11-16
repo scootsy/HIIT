@@ -88,7 +88,10 @@ struct SessionStatsGrid: View {
                          subtitle: "1-min drop after a hard effort")
             }
             if suspendedSeconds > 30 {
-                Label("Includes \(clockString(suspendedSeconds)) while the app was in the background — cues and live heart rate pause when the screen is off or another app is up front.",
+                // The session normally keeps running in the background; this
+                // only appears when iOS actually stopped it for a stretch
+                // (a phone call taking the audio session, memory pressure).
+                Label("Includes \(clockString(suspendedSeconds)) when iOS had paused the app in the background — cues and live heart rate weren't running for that stretch.",
                       systemImage: "moon.zzz")
                     .font(.caption)
                     .foregroundStyle(.secondary)

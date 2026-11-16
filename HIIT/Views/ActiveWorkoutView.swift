@@ -289,8 +289,9 @@ struct ActiveWorkoutView: View {
         let vertical: CGFloat = height < 430 ? 8 : 14
         let space = CGSize(width: max(0, min(width - inset * 2, maxContentWidth)),
                            height: max(0, height - vertical * 2))
+        let filled = content(space)
         return ScrollView(showsIndicators: false) {
-            content(space)
+            filled
                 .frame(width: space.width)
                 .padding(.vertical, vertical)
                 .frame(maxWidth: .infinity, minHeight: height)

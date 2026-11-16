@@ -207,6 +207,21 @@ class IPAInfoTests(unittest.TestCase):
         with self.assertRaisesRegex(ipa_info.IPAError, "inner display"):
             ipa_info.check(portrait, require_orientations=True)
 
+    def test_orientations_are_read_from_the_iphone_specific_key_too(self):
+        # What Xcode generates from INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone.
+        path = os.path.join(self.directory.name, "suffixed.ipa")
+        info = {
+            "CFBundleIdentifier": BUNDLE, "CFBundleShortVersionString": "1.0.31", "CFBundleVersion": "57",
+            "MinimumOSVersion": "17.0", "DTSDKName": "iphoneos27.1",
+            "UISupportedInterfaceOrientations~iphone": ALL_ORIENTATIONS,
+            "UISupportedInterfaceOrientations~ipad": ["UIInterfaceOrientationPortrait"],
+        }
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("Payload/HIIT.app/Info.plist", plistlib.dumps(info))
+        description = ipa_info.describe(path)
+        self.assertEqual(description["orientations"], sorted(ALL_ORIENTATIONS))
+        ipa_info.check(description, require_orientations=True)
+
     def test_command_line_writes_json_and_fails_loudly(self):
         output = os.path.join(self.directory.name, "release.json")
         with contextlib.redirect_stdout(io.StringIO()):

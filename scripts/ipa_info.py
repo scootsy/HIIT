@@ -117,7 +117,10 @@ def describe(ipa_path, entitlement_plists=()):
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
 
-    orientations = info.get("UISupportedInterfaceOrientations") or []
+    # Xcode writes per-device lists under "~iphone" / "~ipad" keys; a plain
+    # key applies to every device. This is an iPhone app, so take both.
+    orientations = set(info.get("UISupportedInterfaceOrientations") or [])
+    orientations.update(info.get("UISupportedInterfaceOrientations~iphone") or [])
     return {
         "schema": SCHEMA,
         "ipaName": os.path.basename(ipa_path),

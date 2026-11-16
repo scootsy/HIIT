@@ -358,10 +358,11 @@ def read_from_directory(directory):
 
 
 def _load_json(path, default=None):
+    """Parsed JSON, or `default` when the file is missing or isn't JSON."""
     try:
         with open(path, encoding="utf-8") as handle:
             return json.load(handle)
-    except OSError:
+    except (OSError, ValueError):
         return default
 
 

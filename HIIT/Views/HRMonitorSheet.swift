@@ -25,7 +25,11 @@ struct HRMonitorSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("Done", systemImage: "checkmark")
+                    }
                 }
             }
         }
