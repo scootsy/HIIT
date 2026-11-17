@@ -76,7 +76,7 @@ A few things to know about sideloaded copies:
 3. Plug in your iPhone, select it as the run destination, and press **Run**.
 4. First run on a free account: on the phone, go to **Settings → General → VPN & Device Management** and trust your developer certificate.
 
-Notes for free accounts: apps expire after 7 days (re-run from Xcode to refresh), and you're limited to 3 sideloaded apps at a time. The HealthKit capability works fine with free provisioning.
+Notes for free accounts: apps expire after 7 days (re-run from Xcode to refresh), and you're limited to 3 sideloaded apps at a time. Apple's capability table lists HealthKit for free accounts, though older sources say it needed a paid membership — not tested here.
 
 ## Live heart rate — two ways
 

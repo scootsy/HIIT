@@ -122,6 +122,10 @@ jobs:
           set -o pipefail
           mkdir -p build/logs
           NSUnbufferedIO=YES make -B build 2>&1 | tee -a build/logs/build.log | xcbeautify --renderer github-actions
+          # Stock and patched SideStore are both "0.6.4"; a different name
+          # under the icon is the only way to tell which one is installed.
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleDisplayName" SideStore.xcarchive/Products/Applications/SideStore.app/Info.plist 2> /dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string SideStore HK" SideStore.xcarchive/Products/Applications/SideStore.app/Info.plist
           make fakesign 2>&1 | tee -a build/logs/build.log
           make ipa 2>&1 | tee -a build/logs/build.log
           ls -la SideStore.ipa
@@ -211,9 +215,9 @@ jobs:
 
           **Only use this if** your SideStore is version $SIDESTORE_TAG (SideStore → Settings), and you could reinstall SideStore from a computer if something went wrong.
 
-          **Install:** download the \`.ipa\` below. In SideStore: My Apps → **+** → pick the file. It has the same app ID as SideStore, so it replaces the one you have. Then open **HIIT Coach** in My Apps and tap its expiry/refresh — that is when SideStore asks Apple for HealthKit.
+          **Install:** download the \`.ipa\` below. In SideStore: My Apps → **+** → pick the file. It has the same app ID as SideStore, so it replaces the one you have. Then update **HIIT Coach**: Sources → pull down to refresh → HIIT Coach → **Update**. That is when SideStore asks Apple for HealthKit and signs the app with it. Don't just tap Refresh (it renews the signing profile but never re-signs the app), and don't delete the app (that erases your history).
 
-          **Not yet proven on a phone.** The build compiles and its capability list is checked automatically; Apple's side only gets exercised when you refresh an app with it. [Details]($BASE/README.md)
+          **Not yet proven on a phone.** The build compiles and its capability list is checked automatically; Apple's side only gets exercised when you install or update an app with it. [Details]($BASE/README.md)
 
           SideStore is licensed under the GNU AGPL-3.0. Source of this build: SideStore $SIDESTORE_TAG (\`$SIDESTORE_SHA\`) and SideSign (\`$SIDESIGN_SHA\`), plus the patch linked above.
           EOF

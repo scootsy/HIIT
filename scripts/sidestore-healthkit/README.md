@@ -34,14 +34,16 @@ The workflow [`sidestore-healthkit.yml`](../../.github/workflows/sidestore-healt
 
 1. On GitHub: **Actions → SideStore with HealthKit (test build) → Run workflow**. Tick **publish** if you'd like a plain download link (a pre-release) instead of an Actions download. The build hasn't been timed yet; expect a while.
 2. Make sure the SideStore on your phone is **version 0.6.4** (SideStore → Settings). The patch is for that release; a different version needs its own build.
-3. Download the IPA to your phone. In SideStore: **My Apps → +** → choose the file. It has SideStore's own app ID, so it replaces the SideStore you have.
-4. Open **HIIT Coach** in My Apps and refresh it. That is the moment SideStore asks Apple for HealthKit and signs with the new profile. Then, in HIIT Coach, tap *Connect Apple Health*.
+3. Download the IPA to your phone. In SideStore: **My Apps → +** → choose the file. It has SideStore's own app ID, so it replaces the SideStore you have. The patched one is named **SideStore HK** under its icon — if the icon still says plain *SideStore*, the install didn't take and you are still on the stock one.
+4. Now **update HIIT Coach**: Sources → pull down to refresh → HIIT Coach → **Update**. That is the moment SideStore asks Apple for HealthKit and signs the app with it. An update installs over the old copy, so your history stays — don't delete the app. Then, in HIIT Coach, tap *Connect Apple Health*.
 
-If the Health sheet still doesn't appear after step 4, the in-app message will say so — please keep that message (and what SideStore's refresh said) for whoever picks this up next.
+   **Update, don't *Refresh*.** In SideStore 0.6.4 a refresh only installs fresh signing profiles (`RefreshAppOperation`); it never re-signs the app, so the app keeps the signature it was installed with. Only an install or update re-signs. And do step 3 first: HIIT Coach updated with stock SideStore is signed without HealthKit, and the same version can't be updated again — you'd have to wait for the next HIIT Coach release.
+
+If the Health sheet still doesn't appear after step 4, the in-app message will say so, with a **Diagnosis** line read from the install's own signing profile: whether Apple's profile includes HealthKit, and how long ago it was issued — please keep that message (and what SideStore said while updating HIIT Coach) for whoever picks this up next.
 
 ### If Apple refuses
 
-If Apple won't enable HealthKit for a free Apple ID, SideStore's refresh of HIIT Coach would show an error, or HIIT Coach would carry on reporting that HealthKit is missing. The remaining route would then be a paid Apple Developer Program membership, where HealthKit is available; how best to use one with SideStore wasn't explored here. Nothing else in HIIT Coach depends on it.
+If Apple won't enable HealthKit for a free Apple ID, SideStore's update of HIIT Coach would show an error, or HIIT Coach would carry on reporting that HealthKit is missing. The remaining route would then be a paid Apple Developer Program membership, where HealthKit is available; how best to use one with SideStore wasn't explored here. Nothing else in HIIT Coach depends on it.
 
 **Going back:** install the official SideStore 0.6.4 IPA from SideStore's releases the same way (or from a computer, as when you first set up).
 

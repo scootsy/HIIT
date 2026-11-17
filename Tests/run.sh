@@ -22,6 +22,7 @@ swiftc -o "$out" \
   HIIT/Engine/MetabolicMath.swift \
   HIIT/Coach/CoachModels.swift \
   HIIT/Support/FlexMath.swift \
+  HIIT/Support/SigningProfile.swift \
   Tests/*.swift
 
 "$out"
