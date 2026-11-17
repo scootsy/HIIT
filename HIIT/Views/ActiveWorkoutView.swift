@@ -289,14 +289,18 @@ struct ActiveWorkoutView: View {
         let vertical: CGFloat = height < 430 ? 8 : 14
         let space = CGSize(width: max(0, min(width - inset * 2, maxContentWidth)),
                            height: max(0, height - vertical * 2))
-        let filled = content(space)
-        return ScrollView(showsIndicators: false) {
-            filled
-                .frame(width: space.width)
-                .padding(.vertical, vertical)
-                .frame(maxWidth: .infinity, minHeight: height)
+        let fitted = content(space)
+            .frame(width: space.width)
+            .padding(.vertical, vertical)
+            .frame(maxWidth: .infinity)
+        // Laid out directly whenever its smallest form fits: being handed a
+        // definite height is what lets the flexible rows share out the spare
+        // room. (Always sitting in a scroll view left the lower half of a
+        // laptop-style fold at its smallest size, floating in empty space.)
+        return ViewThatFits(in: .vertical) {
+            fitted
+            ScrollView(showsIndicators: false) { fitted }
         }
-        .scrollBounceBehavior(.basedOnSize)
         .frame(width: width, height: height)
     }
 
@@ -310,8 +314,10 @@ struct ActiveWorkoutView: View {
             statsCard
             spine
             if editorOpen, !pastWorkIndices.isEmpty { effortEditor }
+            // The ring gives way before the controls leave the screen: on
+            // the smallest iPhone, a live suggestion needs the room.
             ring
-                .flexHeight(min: 150, ideal: 200, max: min(360, space.width), weight: 1)
+                .flexHeight(min: 110, ideal: 200, max: min(360, space.width), weight: 1)
             targetCard
             if let hint = upNextHint { hintLine(hint) }
             WorkoutHRPanel(engine: engine)
@@ -1008,7 +1014,19 @@ private struct WorkoutHRPanel: View {
         LiveCoach.valueText(for: suggestion, engine: engine, useMetric: settings.value.useMetric)
     }
 
+    /// In a narrow pane (half a folded Duo, a phone on its side) the
+    /// average · max readout steps aside; the live reading is never the
+    /// thing that gets squeezed.
     private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            headerRow(summary: hrSummary)
+            headerRow(summary: nil)
+        }
+        .frame(height: 34)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func headerRow(summary: String?) -> some View {
         HStack(spacing: 9) {
             Circle()
                 .fill(Color(hex: 0xFF3B30))
@@ -1019,9 +1037,11 @@ private struct WorkoutHRPanel: View {
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.white)
+                    .fixedSize()
                 Text("BPM")
                     .font(Self.labelFont).tracking(1.7)
                     .foregroundStyle(.white.opacity(0.4))
+                    .fixedSize()
                 if let maxHR = engine.maxHR {
                     Text(HeartRateZone.zone(forPercent: hr / maxHR * 100).label.uppercased())
                         .font(Self.labelFont).tracking(1.7)
@@ -1034,22 +1054,21 @@ private struct WorkoutHRPanel: View {
                 Text("– –")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.35))
+                    .fixedSize()
                 Text(hrHint)
                     .font(Self.labelFont).tracking(1.4)
                     .foregroundStyle(.white.opacity(0.4))
                     .lineLimit(2)
             }
             Spacer(minLength: 6)
-            if let summary = hrSummary {
+            if let summary {
                 Text(summary)
                     .font(Self.labelFont).tracking(1.7)
                     .foregroundStyle(.white.opacity(0.35))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .fixedSize()
             }
         }
-        .frame(height: 34)
-        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder

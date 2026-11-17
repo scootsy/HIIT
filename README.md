@@ -23,7 +23,7 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 | Hill climbs | Low-impact incline work | Treadmills with incline |
 | Cadence surges | Leg-speed work | Bike |
 
-**Keep it on screen while you train.** The app keeps the display awake for the whole session, so this happens naturally — but if you press the power button or switch apps mid-workout, audio cues and live heart rate pause until you come back (the timer reconciles the gap from the wall clock, and the summary notes any time that ran unguided).
+**Screen on or off, it keeps going.** The app keeps the display awake for the whole session, and nothing stops if you lock the phone or switch apps — see the next paragraph. Only when iOS itself suspends the app (a phone call taking over audio, say) do cues pause; the timer then reconciles the gap from the wall clock and the summary says how much time ran unguided.
 
 **It follows you to the lock screen — and keeps working there.** A Live Activity mirrors the workout in the Dynamic Island and on the lock screen: the current phase, a live countdown, the target you should be holding, what's coming next, and **+/− buttons** that adjust the live targets without unlocking the phone. The session itself keeps running with the screen off or another app up front — the audio session and Bluetooth background modes keep the timer, beeps, spoken cues, strap heart rate, and the live coach alive in your pocket — and when the coach has a suggestion, it appears **on the lock screen with its own Apply button** and lights the screen to tell you.
 
@@ -37,15 +37,39 @@ Built with SwiftUI + SwiftData + HealthKit + Swift Charts. No accounts, no subsc
 
 **It remembers.** History with per-phase breakdowns, a weekly-minutes trend chart, and automatic export of every workout (duration, estimated calories, distance) to Apple Health. It also tracks the fitness signals a coach would actually watch: **Cardio Fitness (VO₂max)** and **resting heart rate** trends pulled from Health, plus **1-minute heart-rate recovery** measured automatically after your last hard interval whenever live HR is available.
 
-**Optional AI coach — now a coach you can talk to.** Add your own API key — Anthropic (Claude), OpenAI, or Google (Gemini) — in Settings and the coach opens as a **chat**: it starts with concrete feedback on the session you just finished (including how it graded against its objectives), and takes follow-up questions. Ask for a change — "make things easier", "shorter sessions", "let me walk the recoveries" — and it proposes real plan changes from a fixed menu (difficulty level, next-session length, walking recoveries) rendered as **tap-to-confirm buttons**: nothing applies without your tap, and what you approve flows through the app's ordinary progression machinery. Keys live in the device Keychain and requests go directly from your phone to the provider you chose — no middleman. Each request contains your profile numbers (age, weight, resting HR), your experience level, recent session stats and grades, and any workout notes you wrote — nothing else leaves the device, and only when you open the coach.
+**It's laid out for iPhone Duo — closed, open, and folded.** Every screen arranges itself for the space it actually has rather than for a list of devices. On the Duo's cover display the live workout is a single compact column that fits without scrolling; open it and the timer ring and heart-rate chart grow to use the large display; turn it on its side and the screen splits into two panes — timer and target on one, stats, heart rate and controls on the other. Half-fold it and the two panes sit on either side of the crease: prop it on the treadmill console like a little laptop and the timer stands upright while the controls lie flat under your hand. Ordinary iPhones get the same treatment, including landscape — a phone wedged sideways on a console finally works.
 
-## Requirements
+**Optional AI coach — now a coach you can talk to.** Add your own API key — Anthropic (Claude), OpenAI, or Google (Gemini) — in Settings and the coach opens as a **chat**: it starts with concrete feedback on the session you just finished (including how it graded against its objectives), and takes follow-up questions. Ask for a change — "make things easier", "shorter sessions", "let me walk the recoveries" — and it proposes real plan changes from a fixed menu (difficulty level, next-session length, walking recoveries) rendered as **tap-to-confirm buttons**: nothing applies without your tap, and what you approve flows through the app's ordinary progression machinery. Keys live in the device Keychain and requests go directly from your phone to the provider you chose — no middleman. Each request contains your profile numbers (age, weight, resting HR), your experience level, recent session stats and grades, and any workout notes you wrote — nothing else leaves the device, and only when you open the coach. Providers retire models regularly, so the app doesn't depend on one staying available: if the built-in model is switched off, it asks the provider what your key can use, picks the closest current equivalent, and carries on. You can also name a specific model in Settings.
 
-- Xcode 16 or newer
+## Install it (no Mac needed)
+
+Every change merged into `main` is built into an IPA and published as a [release](../../releases) automatically. Two ways to get it onto a phone:
+
+**Add the source once, get updates forever — SideStore or LiveContainer.** The repository maintains an install feed that both apps understand:
+
+```
+https://raw.githubusercontent.com/scootsy/HIIT/altstore/apps.json
+```
+
+- **SideStore:** Sources → **+** → paste the address. HIIT Coach appears under the source; install it, and SideStore offers each new version as an update (and keeps the 7-day signature refreshed).
+- **LiveContainer:** Sources → **+** → paste the same address. Tap the app to install; tap it again later to pull the newest build.
+
+> **The repository has to be public for this to work.** Both apps fetch the feed and the IPA without signing in to GitHub, so while the repository is private the address above returns "not found". Making it public (Settings → General → Danger Zone → Change repository visibility) is all it takes — nothing needs rebuilding, and builds on public repositories also stop counting against the Actions minutes allowance.
+
+**Or grab one build by hand.** Download `HIIT-unsigned.ipa` from the latest release and open it with SideStore, AltStore or Sideloadly; it is re-signed with your Apple ID.
+
+A few things to know about sideloaded copies:
+
+- **Apple Health** needs the HealthKit entitlement to survive re-signing — see [Sideloading and the Health permission sheet](#sideloading-and-the-health-permission-sheet). SideStore keeps it.
+- **Inside LiveContainer** the app runs as a guest of LiveContainer rather than as its own installed app, so anything iOS ties to the installed app follows LiveContainer instead. The lock-screen Live Activity isn't available there (it needs the app's own widget extension). Apple Health works only if your copy of LiveContainer was signed with its HealthKit entitlement intact — the app tells you if it wasn't. Workouts, cues, the background session and live heart rate from a Bluetooth strap don't depend on any of that. The window belongs to LiveContainer too, so how much of iPhone Duo's displays the app is given is up to LiveContainer's own Duo support. For the complete experience, install with SideStore.
+
+## Requirements (building it yourself)
+
+- Xcode 27.1 or newer — the first SDK that gives an app all of both iPhone Duo displays, and the one the fold-aware layout is written against
 - iOS 17.0+ device
 - A free or paid Apple Developer account (free is fine for sideloading)
 
-## Build & sideload
+## Build & sideload from Xcode
 
 1. Clone the repo and open `HIIT.xcodeproj` in Xcode.
 2. Select the **HIIT** target → **Signing & Capabilities** → choose your **Team** (add your Apple ID under Xcode → Settings → Accounts if needed). Xcode will manage signing automatically; change the bundle identifier if it collides.
@@ -64,9 +88,19 @@ Without either source, everything still works — you train by the speed/resista
 
 ## Sideloading and the Health permission sheet
 
-The HealthKit permission sheet can only appear if the installed app carries the `com.apple.developer.healthkit` entitlement. Xcode installs always do. Sideloaded IPAs depend on the re-signing tool: the CI-built IPA ships ad-hoc-signed with the entitlement embedded so AltStore/SideStore/Sideloadly can carry it over, but if your tool strips it, iOS silently refuses the authorization request — the app detects this and tells you, and reinstalling via Xcode fixes it. This applies doubly to container-style launchers (LiveContainer and similar), which run the app under their own signature.
+The HealthKit permission sheet can only appear if the installed app carries the `com.apple.developer.healthkit` entitlement. Xcode installs always do. Sideloaded IPAs depend on the re-signing tool: the CI-built IPA ships ad-hoc-signed with the entitlement embedded so AltStore/SideStore/Sideloadly can carry it over, but if your tool strips it, iOS silently refuses the authorization request — the app detects this and tells you, and reinstalling via Xcode fixes it. Container-style launchers (LiveContainer and similar) run the app under their own signature, so there it comes down to whether the launcher itself was signed with HealthKit.
 
 Helpfully, the live Bluetooth heart-rate path uses CoreBluetooth, not HealthKit — so live HR from a paired strap works even in installs where the Health integration can't. You lose only the durable Health sync until the app runs properly signed.
+
+## How releases and the install feed work
+
+`.github/workflows/release.yml` does everything; there is nothing to run by hand.
+
+- **On every pull request** it runs the logic tests, compiles the app with Xcode 27, and prints a preview of what the install feed would contain — so a broken build or a broken feed is caught before merging.
+- **On every merge to `main`** it builds the IPA, publishes a GitHub release, and regenerates the install feed on the `altstore` branch.
+- **Versions take care of themselves.** Each build is stamped `MAJOR.MINOR.PATCH`: `MAJOR.MINOR` comes from the Xcode project (`MARKETING_VERSION`), and `PATCH` is one more than the newest release — 1.0.31, 1.0.32, … SideStore decides whether an update exists by comparing those numbers, so every release must carry its own. To start a new series, change `MARKETING_VERSION` (to `1.1`, say).
+- **The feed describes what was actually built.** After packaging, `scripts/ipa_info.py` reads the version, build number, size and SHA-256 back out of the IPA and attaches them to the release as `release.json`; `scripts/build_source.py` assembles `apps.json` from those files. Installers verify every one of those values against the download, so none of them is ever typed by hand. Delete a release and it drops out of the feed on the next run.
+- **Checking layouts without a device.** Actions → *Build & Release IPA* → *Run workflow* → tick *Photograph every screen*: the workflow opens each screen with sample data on the iPhone Duo simulator (closed, open, on its side, half folded), draws the live workout at ordinary iPhone sizes too, and uploads the pictures as an artifact. It takes about a quarter of an hour of macOS runner time, so it only runs when asked. `scripts/screenshots.sh` does the same on a Mac.
 
 ## Project layout
 
@@ -81,15 +115,22 @@ HIIT/
 │   ├── LiveCoach.swift        Rule-based in-session suggestions (one-tap apply)
 │   ├── SpeedCalibration.swift Personal speed→HR fit feeding the generator
 │   ├── SessionObjectives.swift Post-session HR-based objective grading
-│   ├── ProgressionEngine.swift Progressive-overload rules
+│   ├── ProgressionEngine.swift Progressive-overload rules and the weekly cap
 │   └── MetabolicMath.swift    ACSM MET equations, calories, HR zones
 ├── Health/                    HealthKit auth, profile pull, live HR, workout export
-├── Coach/                     Optional AI-coach client (Claude/OpenAI/Gemini) + Keychain
-├── Support/                   Theme, tones, checkpointing, Live Activity controller
+├── Coach/                     Optional AI-coach client (Claude/OpenAI/Gemini),
+│                              model selection + recovery, Keychain
+├── Support/
+│   ├── AdaptiveLayout.swift   Fold reading, the flexible full-screen stack
+│   ├── DemoMode.swift         Debug-only: any screen with sample data
+│   └── …                      Theme, tones, checkpointing, Live Activity controller
 └── Views/                     Home, guided setup, live workout, summary,
                                history + charts, settings, science explainer
 Shared/                        Live Activity attributes + intents (app + widget)
 HIITWidgets/                   Widget extension: lock screen + Dynamic Island UI
+Tests/                         Logic tests — ./Tests/run.sh, needs only swiftc
+scripts/                       Release tooling (IPA description, install feed,
+                               simulator screenshots) and its tests
 ```
 
 ## Disclaimers

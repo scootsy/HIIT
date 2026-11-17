@@ -24,6 +24,10 @@ import UIKit
 /// - `-demoOrientation landscape`  ask the scene to rotate
 /// - `-demoInfo 1`  overlay the window's safe area, size classes, and (iOS
 ///   27.1+) the fold and camera regions the system reports
+/// - `-demoSnapshot NAME`  two seconds after the screen appears, save a
+///   picture of it as Documents/demo-snapshots/NAME.jpg (plus NAME.txt with
+///   the window size and whatever the info overlay shows) — how
+///   scripts/screenshots.sh collects its pictures
 ///
 /// Nothing here reads or writes the real settings, workout history, Health
 /// or Bluetooth.
@@ -34,6 +38,7 @@ struct DemoMode {
     var canvas: CGSize?
     var landscape: Bool?
     var showInfo: Bool
+    var snapshotName: String?
 
     static let current: DemoMode? = {
         let defaults = UserDefaults.standard
@@ -58,7 +63,8 @@ struct DemoMode {
                         equipment: Equipment(rawValue: defaults.string(forKey: "demoEquipment") ?? "") ?? .treadmill,
                         canvas: canvas,
                         landscape: landscape,
-                        showInfo: defaults.bool(forKey: "demoInfo"))
+                        showInfo: defaults.bool(forKey: "demoInfo"),
+                        snapshotName: defaults.string(forKey: "demoSnapshot"))
     }()
 }
 
@@ -111,6 +117,12 @@ struct DemoRootView: View {
             }
         }
         .onAppear(perform: applyOrientation)
+        .task {
+            guard let name = demo.snapshotName, !name.isEmpty else { return }
+            // Long enough for a rotation, a sheet or a chart to settle.
+            try? await Task.sleep(for: .seconds(2))
+            await DemoSnapshot.save(named: name)
+        }
     }
 
     @ViewBuilder
@@ -189,10 +201,16 @@ private struct DemoInfoOverlay: View {
     var body: some View {
         GeometryReader { geo in
             let insets = geo.safeAreaInsets
+            let lines: [String] = [
+                "safe area \(Int(geo.size.width))x\(Int(geo.size.height))",
+                "insets t\(Int(insets.top)) b\(Int(insets.bottom)) l\(Int(insets.leading)) r\(Int(insets.trailing))",
+                "size class h:\(Self.name(horizontal)) v:\(Self.name(vertical))",
+            ]
+            let _ = DemoSnapshot.note(lines, section: "1 layout")
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: "safe area \(Int(geo.size.width))x\(Int(geo.size.height))")
-                Text(verbatim: "insets t\(Int(insets.top)) b\(Int(insets.bottom)) l\(Int(insets.leading)) r\(Int(insets.trailing))")
-                Text(verbatim: "size class h:\(Self.name(horizontal)) v:\(Self.name(vertical))")
+                ForEach(lines, id: \.self) { line in
+                    Text(verbatim: line)
+                }
                 if #available(iOS 27.1, *) {
                     DemoRegionInfo(proxy: geo)
                 } else {
@@ -224,18 +242,26 @@ private struct DemoRegionInfo: View {
     @Environment(\.toolbarVerticalEdge) private var verticalEdge
 
     var body: some View {
+        let lines: [String] = regionLines
+        let _ = DemoSnapshot.note(lines, section: "2 regions")
+        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+            Text(verbatim: line)
+        }
+    }
+
+    private var regionLines: [String] {
+        var lines: [String] = ["vertical bars: " + edgeName]
         let divisions = proxy.reservedRegions(kind: .division, options: .includeInactive)
-        let occlusions = proxy.reservedRegions(kind: .occlusion, options: .includeInactive)
-        Text(verbatim: "vertical bars: \(edgeName)")
         if divisions.isEmpty {
-            Text(verbatim: "fold: none")
+            lines.append("fold: none")
         }
-        ForEach(Array(divisions.enumerated()), id: \.offset) { _, region in
-            Text(verbatim: "fold \(Self.describe(region.frame)) \(region.isActive ? "active" : "inactive")")
+        for region in divisions {
+            lines.append("fold " + Self.describe(region.frame) + (region.isActive ? " active" : " inactive"))
         }
-        ForEach(Array(occlusions.enumerated()), id: \.offset) { _, region in
-            Text(verbatim: "camera \(Self.describe(region.frame)) \(region.isActive ? "active" : "inactive")")
+        for region in proxy.reservedRegions(kind: .occlusion, options: .includeInactive) {
+            lines.append("camera " + Self.describe(region.frame) + (region.isActive ? " active" : " inactive"))
         }
+        return lines
     }
 
     private var edgeName: String {
@@ -248,6 +274,59 @@ private struct DemoRegionInfo: View {
 
     private static func describe(_ frame: CGRect) -> String {
         "x\(Int(frame.minX)) y\(Int(frame.minY)) \(Int(frame.width))x\(Int(frame.height))"
+    }
+}
+
+// MARK: - Snapshots
+
+/// Saves a picture of the app's own windows where a script can collect it.
+/// `simctl io screenshot` is the usual way to photograph a simulator, but it
+/// failed on every attempt against iPhone Duo's two displays; drawing the
+/// windows from inside the app works wherever the app runs. (It shows what
+/// the app draws — not the system's status bar or the display's corners.)
+@MainActor
+enum DemoSnapshot {
+    /// What the info overlay is currently showing, by section.
+    private static var notes: [String: [String]] = [:]
+
+    static func note(_ lines: [String], section: String) {
+        notes[section] = lines
+    }
+
+    static func save(named name: String) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else { return }
+        let windows = scene.windows
+            .filter { !$0.isHidden && $0.bounds.width > 0 && $0.bounds.height > 0 }
+            .sorted { $0.windowLevel.rawValue < $1.windowLevel.rawValue }
+        guard let canvas = windows.map(\.frame).max(by: { $0.width * $0.height < $1.width * $1.height }) else { return }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2    // plenty to judge a layout, and keeps the files small
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(bounds: canvas, format: format).image { context in
+            UIColor.black.setFill()
+            context.fill(canvas)
+            for window in windows {
+                window.drawHierarchy(in: window.frame, afterScreenUpdates: true)
+            }
+        }
+
+        let safeName = name.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." }
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("demo-snapshots", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let landscape = canvas.width > canvas.height
+        var text: [String] = ["window \(Int(canvas.width))x\(Int(canvas.height)) pt, " + (landscape ? "landscape" : "portrait")]
+        for section in notes.keys.sorted() {
+            text.append(contentsOf: notes[section] ?? [])
+        }
+        // The text first: the script takes the picture's arrival as "done".
+        let report = text.joined(separator: "\n") + "\n"
+        try? report.write(to: folder.appendingPathComponent(safeName + ".txt"), atomically: true, encoding: .utf8)
+        try? image.jpegData(compressionQuality: 0.82)?
+            .write(to: folder.appendingPathComponent(safeName + ".jpg"), options: .atomic)
     }
 }
 
