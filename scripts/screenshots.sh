@@ -26,6 +26,10 @@
 # `simctl io screenshot`, which fails on the Duo's two displays. They show
 # everything the app draws; the system's status bar isn't part of that.
 #
+# To re-check one screen without paying for all of them, set ONLY to a
+# pattern: ONLY='live-work|home' photographs just the pictures whose names
+# match (the workflow's "only" box does the same).
+#
 # Besides the files, small copies are printed into the log as text, in a
 # folded section at the end. That is for AI coding tools working from a
 # sandbox that can read a job's log but can't download its artifacts; set
@@ -142,6 +146,7 @@ boot() {
 shoot() {
   local udid="$1" name="$2" tries=0
   shift 2
+  if [ -n "${ONLY:-}" ] && ! printf '%s' "$name" | grep -q -E -- "$ONLY"; then return; fi
   [ -n "$SNAPSHOTS" ] && rm -f "$SNAPSHOTS/$name.jpg" "$SNAPSHOTS/$name.txt"
   xcrun simctl terminate "$udid" "$BUNDLE" > /dev/null 2>&1 || true
   if ! xcrun simctl launch "$udid" "$BUNDLE" -demoSnapshot "$name" "$@" > /dev/null 2> "$RAW/launch.err"; then

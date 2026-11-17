@@ -167,9 +167,14 @@ struct HomeView: View {
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity)
         .background(
-            LinearGradient(colors: [Color(.systemGroupedBackground).opacity(0),
-                                    Color(.systemGroupedBackground)],
+            // Runs on down through the bottom safe area: where the tab bar
+            // sits at the side instead (iPhone Duo's cover display), rows
+            // would otherwise show in the strip beneath the button.
+            LinearGradient(stops: [.init(color: Color(.systemGroupedBackground).opacity(0), location: 0),
+                                   .init(color: Color(.systemGroupedBackground).opacity(0.94), location: 0.42),
+                                   .init(color: Color(.systemGroupedBackground), location: 1)],
                            startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea(edges: .bottom)
                 .allowsHitTesting(false)
         )
     }

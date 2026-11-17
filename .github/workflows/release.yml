@@ -22,6 +22,10 @@ on:
         description: Photograph every screen on the iPhone Duo simulator (about 15 minutes)
         type: boolean
         default: false
+      only:
+        description: "Screenshots: just the pictures whose name matches this (optional, e.g. live-work|home)"
+        type: string
+        default: ""
 
 # Write access is granted only to the release job below — everything that
 # runs on pull requests needs nothing beyond read.
@@ -244,6 +248,8 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Photograph every screen
+        env:
+          ONLY: ${{ inputs.only }}
         run: ./scripts/screenshots.sh screenshots
 
       - name: Upload the screenshots
