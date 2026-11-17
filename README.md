@@ -88,7 +88,7 @@ Without either source, everything still works — you train by the speed/resista
 
 ## Apple Health and sideloading
 
-The Health permission sheet only appears if the installed app's signature carries Apple's `com.apple.developer.healthkit` entitlement, and that only happens when the signing profile Apple issues for the app includes HealthKit — that is, the capability was switched on for the app's ID. Apple lets a free Apple ID do that (its [capability table](https://developer.apple.com/help/account/reference/supported-capabilities-ios) lists HealthKit for the no-cost tier).
+The Health permission sheet only appears if the installed app's signature carries Apple's `com.apple.developer.healthkit` entitlement, and that only happens when the signing profile Apple issues for the app includes HealthKit — that is, the capability was switched on for the app's ID. Apple's [capability table](https://developer.apple.com/help/account/reference/supported-capabilities-ios) lists HealthKit for the no-cost tier too, though older sources say a paid membership was needed — that part hasn't been confirmed.
 
 - **Xcode** switches it on for you, so installs from Xcode always have Health.
 - **SideStore** doesn't: its signing library has no mapping for HealthKit, so it never asks, Apple's profile comes back without it, and the entitlement is dropped from the signature. HIIT Coach notices and says so when you tap *Connect Apple Health*. (Read from the source of SideStore 0.6.4 and of its development branch.)

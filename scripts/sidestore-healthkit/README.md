@@ -2,14 +2,14 @@
 
 **In short.** SideStore never asks Apple to switch on the HealthKit capability when it signs an app, so HIIT Coach installed through SideStore can't show the Apple Health permission sheet. This folder holds a small fix for SideStore, a check that the fix does what it should, and a workflow that builds a SideStore with the fix — no Mac and no Xcode.
 
-> **Status:** the fix compiles and passes its check, and the build runs on GitHub's Macs. It has **not** been tried on a real phone with a real Apple ID — nothing here can do that. Apple's own documentation says a free Apple ID may use HealthKit, so it should work; the first refresh of HIIT Coach after installing is the real test.
+> **Status:** the fix compiles and passes its check, and the build runs on GitHub's Macs. It has **not** been tried on a real phone with a real Apple ID — nothing here can do that. Apple's current documentation says a free Apple ID may use HealthKit, but older sources say a paid membership was needed, so whether Apple will say yes to *your* account is the first thing the test will show. If it says no, see [If Apple refuses](#if-apple-refuses).
 
 ## What was found
 
 | Question | Answer | How it was established |
 |---|---|---|
 | Does the HIIT IPA carry the HealthKit entitlement? | Yes | CI reads it back out of the IPA's signature (`release.json` lists `com.apple.developer.healthkit`). |
-| Does Apple let a free Apple ID use HealthKit? | Yes | Apple's [Supported capabilities (iOS)](https://developer.apple.com/help/account/reference/supported-capabilities-ios) table ticks HealthKit for the "Apple Developer" column — the no-cost tier. |
+| Does Apple let a free Apple ID use HealthKit? | **Its current documentation says yes — the part that could still fail** | Apple's [Supported capabilities (iOS)](https://developer.apple.com/help/account/reference/supported-capabilities-ios) table ticks HealthKit for the "Apple Developer" column — the no-cost tier. Older tutorials, and a 2022 question on Apple's developer forums that got no answer, suggest it once needed a paid membership. I couldn't test it. |
 | Does SideStore ask Apple for it? | **No** | SideStore signs with its SideSign library. In `Sources/Models/Feature.swift`, `Feature(entitlement:)` turns an app's entitlements into App ID capabilities, and has no HealthKit case; the lists of capabilities a free or paid account may request (`freeFeatures`, `paidFeatures`) don't include it either. |
 | What happens to the entitlement? | It is dropped | `Sources/CodeSigning/CodeSignerAPI.swift` signs with only the entitlements that are in the provisioning profile Apple returns. Apple's profile has no HealthKit because the App ID never had it switched on. |
 
@@ -38,6 +38,10 @@ The workflow [`sidestore-healthkit.yml`](../../.github/workflows/sidestore-healt
 4. Open **HIIT Coach** in My Apps and refresh it. That is the moment SideStore asks Apple for HealthKit and signs with the new profile. Then, in HIIT Coach, tap *Connect Apple Health*.
 
 If the Health sheet still doesn't appear after step 4, the in-app message will say so — please keep that message (and what SideStore's refresh said) for whoever picks this up next.
+
+### If Apple refuses
+
+If Apple won't enable HealthKit for a free Apple ID, SideStore's refresh of HIIT Coach would show an error, or HIIT Coach would carry on reporting that HealthKit is missing. The remaining route would then be a paid Apple Developer Program membership, where HealthKit is available; how best to use one with SideStore wasn't explored here. Nothing else in HIIT Coach depends on it.
 
 **Going back:** install the official SideStore 0.6.4 IPA from SideStore's releases the same way (or from a computer, as when you first set up).
 
