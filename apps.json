@@ -23,6 +23,17 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.0.34",
+          "buildVersion": "44",
+          "buildNumber": "44",
+          "date": "2026-11-17T06:04:44Z",
+          "localizedDescription": "Health via SideStore: self-diagnosing failure message, labelled SideStore build, corrected steps (#17)",
+          "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.34/HIIT-unsigned.ipa",
+          "size": 1454701,
+          "sha256": "c029a8a5424208b313411f52a746d50b66750e3ca2a343f80e7fea133d550702",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.0.33",
           "buildVersion": "41",
           "buildNumber": "41",
@@ -66,11 +77,11 @@
           "NSHealthUpdateUsageDescription": "HIIT Coach saves your finished interval workouts (duration, estimated calories, and distance) to Apple Health."
         }
       },
-      "version": "1.0.33",
-      "versionDate": "2026-11-17T05:36:46Z",
-      "versionDescription": "Apple Health through SideStore: why it fails, and a no-Mac fix (#16)",
-      "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.33/HIIT-unsigned.ipa",
-      "size": 1449875
+      "version": "1.0.34",
+      "versionDate": "2026-11-17T06:04:44Z",
+      "versionDescription": "Health via SideStore: self-diagnosing failure message, labelled SideStore build, corrected steps (#17)",
+      "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.34/HIIT-unsigned.ipa",
+      "size": 1454701
     }
   ],
   "news": []
