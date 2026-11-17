@@ -23,6 +23,17 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.0.33",
+          "buildVersion": "41",
+          "buildNumber": "41",
+          "date": "2026-11-17T05:36:46Z",
+          "localizedDescription": "Apple Health through SideStore: why it fails, and a no-Mac fix (#16)",
+          "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.33/HIIT-unsigned.ipa",
+          "size": 1449875,
+          "sha256": "dd485f78ab6a4389029e90e49b33fcc71c40e2e9ad381a28afb28a10deee2b51",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.0.32",
           "buildVersion": "38",
           "buildNumber": "38",
@@ -55,11 +66,11 @@
           "NSHealthUpdateUsageDescription": "HIIT Coach saves your finished interval workouts (duration, estimated calories, and distance) to Apple Health."
         }
       },
-      "version": "1.0.32",
-      "versionDate": "2026-11-17T00:10:18Z",
-      "versionDescription": "Follow-up: README for the Duo build and install source, working simulator screenshots (#15)",
-      "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.32/HIIT-unsigned.ipa",
-      "size": 1449792
+      "version": "1.0.33",
+      "versionDate": "2026-11-17T05:36:46Z",
+      "versionDescription": "Apple Health through SideStore: why it fails, and a no-Mac fix (#16)",
+      "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.33/HIIT-unsigned.ipa",
+      "size": 1449875
     }
   ],
   "news": []
