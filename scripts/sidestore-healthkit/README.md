@@ -1,0 +1,58 @@
+# Apple Health for SideStore installs
+
+**In short.** SideStore never asks Apple to switch on the HealthKit capability when it signs an app, so HIIT Coach installed through SideStore can't show the Apple Health permission sheet. This folder holds a small fix for SideStore, a check that the fix does what it should, and a workflow that builds a SideStore with the fix — no Mac and no Xcode.
+
+> **Status:** the fix compiles and passes its check, and the build runs on GitHub's Macs. It has **not** been tried on a real phone with a real Apple ID — nothing here can do that. Apple's own documentation says a free Apple ID may use HealthKit, so it should work; the first refresh of HIIT Coach after installing is the real test.
+
+## What was found
+
+| Question | Answer | How it was established |
+|---|---|---|
+| Does the HIIT IPA carry the HealthKit entitlement? | Yes | CI reads it back out of the IPA's signature (`release.json` lists `com.apple.developer.healthkit`). |
+| Does Apple let a free Apple ID use HealthKit? | Yes | Apple's [Supported capabilities (iOS)](https://developer.apple.com/help/account/reference/supported-capabilities-ios) table ticks HealthKit for the "Apple Developer" column — the no-cost tier. |
+| Does SideStore ask Apple for it? | **No** | SideStore signs with its SideSign library. In `Sources/Models/Feature.swift`, `Feature(entitlement:)` turns an app's entitlements into App ID capabilities, and has no HealthKit case; the lists of capabilities a free or paid account may request (`freeFeatures`, `paidFeatures`) don't include it either. |
+| What happens to the entitlement? | It is dropped | `Sources/CodeSigning/CodeSignerAPI.swift` signs with only the entitlements that are in the provisioning profile Apple returns. Apple's profile has no HealthKit because the App ID never had it switched on. |
+
+Read from the source of SideStore 0.6.4 (SideSign `7f81842`, the current stable release) and of the development branch on 2026-11-17 (SideSign `752d1ef`): the same gap in both. The open-source signing tool PlumeImpactor doesn't map it either — only comments noting the capability's id. I could not check whether SideStore already has a request open for this (GitHub's issue search wasn't reachable from where this was written).
+
+When the entitlement is missing, HIIT Coach says so when you tap *Connect Apple Health*; the Bluetooth heart-rate strap, manual age/weight entry and everything else keep working — only reading your Health profile, picking up an Apple Watch's heart rate, and saving finished workouts to Health need HealthKit.
+
+## The fix
+
+[`healthkit.patch`](healthkit.patch) changes two files of SideSign — ten added lines:
+
+- `Feature.swift` — a `healthKit` capability (`HK421J6T7P`, the id Apple's developer portal uses for HealthKit), mapped from the `com.apple.developer.healthkit` entitlement, and allowed for free and paid accounts.
+- `Entitlement.swift` — the matching entitlement constant, listed as available to free accounts in SideStore's entitlement editor.
+
+Clinical Health Records (`com.apple.developer.healthkit.access`) needs special approval from Apple and is deliberately left alone.
+
+[`check/main.swift`](check/main.swift) compiles SideSign's capability code with the patch and checks it: the mapping, the free and paid lists, and that nothing that worked before changed. It runs at the start of every build.
+
+## Building and installing it
+
+The workflow [`sidestore-healthkit.yml`](../../.github/workflows/sidestore-healthkit.yml) checks out SideStore 0.6.4 exactly as released, applies the patch, builds it the way SideStore's own release workflow does, and saves the IPA.
+
+1. On GitHub: **Actions → SideStore with HealthKit (test build) → Run workflow**. Tick **publish** if you'd like a plain download link (a pre-release) instead of an Actions download. The build hasn't been timed yet; expect a while.
+2. Make sure the SideStore on your phone is **version 0.6.4** (SideStore → Settings). The patch is for that release; a different version needs its own build.
+3. Download the IPA to your phone. In SideStore: **My Apps → +** → choose the file. It has SideStore's own app ID, so it replaces the SideStore you have.
+4. Open **HIIT Coach** in My Apps and refresh it. That is the moment SideStore asks Apple for HealthKit and signs with the new profile. Then, in HIIT Coach, tap *Connect Apple Health*.
+
+If the Health sheet still doesn't appear after step 4, the in-app message will say so — please keep that message (and what SideStore's refresh said) for whoever picks this up next.
+
+**Going back:** install the official SideStore 0.6.4 IPA from SideStore's releases the same way (or from a computer, as when you first set up).
+
+Things to know:
+
+- This is an **unofficial** build, not made or endorsed by the SideStore team. SideStore is licensed under the GNU AGPL-3.0; the source of a build is the SideStore and SideSign revisions pinned in the workflow plus `healthkit.patch`, and each build's `BUILD-INFO.txt` records them.
+- It handles your Apple ID sign-in, like SideStore does. The change is small enough to read in a minute — please do.
+- It must be rebuilt (and the patch possibly adapted) when SideStore releases a new version. The cleaner long-term fix is for SideStore to include this change.
+
+## Suggesting it to SideStore
+
+A ready-to-paste issue for [SideStore/SideStore](https://github.com/SideStore/SideStore/issues):
+
+> **HealthKit capability is never requested for apps that declare `com.apple.developer.healthkit`**
+>
+> Apps that need HealthKit install through SideStore without it: the Health permission sheet never appears (iOS reports the HealthKit entitlement as missing). Cause: SideSign's `Feature(entitlement:)` has no case for `.healthKit`, and `Feature.freeFeatures` / `paidFeatures` don't list it, so `FetchProvisioningProfilesOperation.updateFeatures` never enables the capability on the App ID; Apple's profile then lacks the entitlement and `CodeSignerAPI` drops it. Apple's Supported capabilities (iOS) table lists HealthKit for the free "Apple Developer" tier.
+>
+> Proposed change (SideSign 7f81842 / SideStore 0.6.4): add `Feature.healthKit = "HK421J6T7P"`, map `.healthKit → .healthKit` in `Feature(entitlement:)`, and add it to `freeFeatures` and `paidFeatures`. Compiles and passes a small unit check; not yet confirmed against Apple's servers with a real account.

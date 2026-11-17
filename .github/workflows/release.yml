@@ -317,8 +317,8 @@ jobs:
             printf '%s\n\n' "**Version $VERSION (build $BUILD)** — iOS 17 or later, laid out for iPhone Duo."
             printf '%s\n\n' "**Get updates automatically.** Add this source once in SideStore or LiveContainer and new versions show up on their own:"
             printf '%s\n\n' "\`$SOURCE_URL\`"
-            printf '%s\n\n' "**Or install this build by hand.** Download \`$IPA_NAME\` below and open it with SideStore, AltStore or Sideloadly — it is re-signed with your Apple ID. Keep the HealthKit entitlement if the tool asks."
-            printf '%s\n\n' "**If the Apple Health permission sheet never appears** after tapping Connect, the signing tool stripped the HealthKit entitlement — the app will say so. Live heart rate from a Bluetooth strap still works; reinstalling with HealthKit kept (or from Xcode) restores Health."
+            printf '%s\n\n' "**Or install this build by hand.** Download \`$IPA_NAME\` below and open it with SideStore, AltStore or Sideloadly — it is re-signed with your Apple ID."
+            printf '%s\n\n' "**Apple Health and SideStore.** SideStore doesn't ask Apple for the HealthKit capability when it signs an app, so HIIT Coach installed that way can't show the Health permission sheet — the app says so. Everything else works, including a Bluetooth heart-rate strap. A fix, and how to use it, is in \`scripts/sidestore-healthkit\` in the repository: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/main/scripts/sidestore-healthkit"
             printf '%s\n' "Free Apple IDs: sideloaded apps expire after 7 days — SideStore refreshes them for you."
           } > release-notes.md
           cat release-notes.md

@@ -43,8 +43,9 @@ final class HealthKitManager {
 
     /// Returns nil on success, or a user-facing explanation of why the
     /// permission sheet could not be shown. The most common failure is a
-    /// re-signed sideloaded build whose HealthKit entitlement was stripped —
-    /// iOS then rejects the request without ever presenting the sheet.
+    /// sideloaded build signed without the HealthKit capability (SideStore
+    /// never asks Apple for it) — iOS then rejects the request without ever
+    /// presenting the sheet.
     func requestAuthorization() async -> String? {
         guard Self.isAvailable else {
             return "Health data isn't available on this device."
@@ -73,7 +74,7 @@ final class HealthKitManager {
             // error text.
             if message.localizedCaseInsensitiveContains("entitlement")
                 || message.contains("com.apple.developer.healthkit") {
-                return "This copy of the app is missing the HealthKit capability, so iOS refused to show the permission sheet. Sideloading tools sometimes strip it when re-signing — reinstall via Xcode (most reliable), or use Sideloadly with the HealthKit entitlement kept."
+                return "This install of HIIT Coach doesn't include Apple's HealthKit permission, so iOS can't show the Health sheet. Some sideloading tools — SideStore, for one — don't ask Apple for it when they sign an app. Nothing else is affected: type your age and weight in Settings, and pair a Bluetooth heart-rate strap for live heart rate. The project's README on GitHub explains how to get an install that includes Health."
             }
             return message
         }
