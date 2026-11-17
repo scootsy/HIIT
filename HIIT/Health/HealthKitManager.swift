@@ -74,7 +74,8 @@ final class HealthKitManager {
             // error text.
             if message.localizedCaseInsensitiveContains("entitlement")
                 || message.contains("com.apple.developer.healthkit") {
-                return "This install of HIIT Coach doesn't include Apple's HealthKit permission, so iOS can't show the Health sheet. Some sideloading tools — SideStore, for one — don't ask Apple for it when they sign an app. Nothing else is affected: type your age and weight in Settings, and pair a Bluetooth heart-rate strap for live heart rate. The project's README on GitHub explains how to get an install that includes Health."
+                let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+                return "This install of HIIT Coach (\(version)) doesn't include Apple's HealthKit permission, so iOS can't show the Health sheet. \(SigningProfile.healthKitDiagnosis(SigningProfile.embedded)) Nothing else is affected: type your age and weight in Settings, and pair a Bluetooth heart-rate strap for live heart rate. The project's README on GitHub explains how to get an install that includes Health."
             }
             return message
         }

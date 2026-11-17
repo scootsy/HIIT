@@ -122,6 +122,10 @@ jobs:
           set -o pipefail
           mkdir -p build/logs
           NSUnbufferedIO=YES make -B build 2>&1 | tee -a build/logs/build.log | xcbeautify --renderer github-actions
+          # Stock and patched SideStore are both "0.6.4"; a different name
+          # under the icon is the only way to tell which one is installed.
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleDisplayName" SideStore.xcarchive/Products/Applications/SideStore.app/Info.plist 2> /dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string SideStore HK" SideStore.xcarchive/Products/Applications/SideStore.app/Info.plist
           make fakesign 2>&1 | tee -a build/logs/build.log
           make ipa 2>&1 | tee -a build/logs/build.log
           ls -la SideStore.ipa
