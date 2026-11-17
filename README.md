@@ -60,8 +60,8 @@ https://raw.githubusercontent.com/scootsy/HIIT/altstore/apps.json
 
 A few things to know about sideloaded copies:
 
-- **Apple Health** needs the HealthKit entitlement to survive re-signing — see [Sideloading and the Health permission sheet](#sideloading-and-the-health-permission-sheet). SideStore keeps it.
-- **Inside LiveContainer** the app runs as a guest of LiveContainer rather than as its own installed app, so anything iOS ties to the installed app follows LiveContainer instead. The lock-screen Live Activity isn't available there (it needs the app's own widget extension). Apple Health works only if your copy of LiveContainer was signed with its HealthKit entitlement intact — the app tells you if it wasn't. Workouts, cues, the background session and live heart rate from a Bluetooth strap don't depend on any of that. The window belongs to LiveContainer too, so how much of iPhone Duo's displays the app is given is up to LiveContainer's own Duo support. For the complete experience, install with SideStore.
+- **Apple Health doesn't work through stock SideStore.** It never asks Apple to switch on the HealthKit capability when it signs an app, so iOS can't show the Health permission sheet (the app says so). There is a fix you can build without a Mac — see [Apple Health and sideloading](#apple-health-and-sideloading).
+- **Inside LiveContainer** the app runs as a guest of LiveContainer rather than as its own installed app, so anything iOS ties to the installed app follows LiveContainer instead. The lock-screen Live Activity isn't available there (it needs the app's own widget extension). Apple Health inside LiveContainer depends on LiveContainer's own signature having HealthKit, which stock SideStore doesn't give it either — the app tells you if it doesn't. Workouts, cues, the background session and live heart rate from a Bluetooth strap don't depend on any of that. The window belongs to LiveContainer too, so how much of iPhone Duo's displays the app is given is up to LiveContainer's own Duo support. For the complete experience, install with SideStore.
 
 ## Requirements (building it yourself)
 
@@ -86,11 +86,17 @@ Notes for free accounts: apps expire after 7 days (re-run from Xcode to refresh)
 
 Without either source, everything still works — you train by the speed/resistance targets and RPE instead of live bpm.
 
-## Sideloading and the Health permission sheet
+## Apple Health and sideloading
 
-The HealthKit permission sheet can only appear if the installed app carries the `com.apple.developer.healthkit` entitlement. Xcode installs always do. Sideloaded IPAs depend on the re-signing tool: the CI-built IPA ships ad-hoc-signed with the entitlement embedded so AltStore/SideStore/Sideloadly can carry it over, but if your tool strips it, iOS silently refuses the authorization request — the app detects this and tells you, and reinstalling via Xcode fixes it. Container-style launchers (LiveContainer and similar) run the app under their own signature, so there it comes down to whether the launcher itself was signed with HealthKit.
+The Health permission sheet only appears if the installed app's signature carries Apple's `com.apple.developer.healthkit` entitlement, and that only happens when the signing profile Apple issues for the app includes HealthKit — that is, the capability was switched on for the app's ID. Apple's [capability table](https://developer.apple.com/help/account/reference/supported-capabilities-ios) lists HealthKit for the no-cost tier too, though older sources say a paid membership was needed — that part hasn't been confirmed.
 
-Helpfully, the live Bluetooth heart-rate path uses CoreBluetooth, not HealthKit — so live HR from a paired strap works even in installs where the Health integration can't. You lose only the durable Health sync until the app runs properly signed.
+- **Xcode** switches it on for you, so installs from Xcode always have Health.
+- **SideStore** doesn't: its signing library has no mapping for HealthKit, so it never asks, Apple's profile comes back without it, and the entitlement is dropped from the signature. HIIT Coach notices and says so when you tap *Connect Apple Health*. (Read from the source of SideStore 0.6.4 and of its development branch.)
+- **Other sideloading tools** (AltStore, Sideloadly, …) haven't been checked.
+
+**A fix without a Mac:** [`scripts/sidestore-healthkit`](scripts/sidestore-healthkit/) holds a ten-line change that makes SideStore ask for HealthKit, and a workflow that builds SideStore 0.6.4 with it (Actions → *SideStore with HealthKit (test build)*). It's unofficial and hasn't been tried on a real phone yet — read that folder's README before using it.
+
+Without Health nothing else is lost: live heart rate from a Bluetooth strap uses CoreBluetooth, not HealthKit, and age, weight and resting heart rate can be typed in Settings. What does need HealthKit is reading those values from Health automatically, picking up an Apple Watch's heart rate, and saving finished workouts to Health.
 
 ## How releases and the install feed work
 

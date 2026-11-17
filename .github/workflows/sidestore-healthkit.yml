@@ -1,0 +1,232 @@
+name: SideStore with HealthKit (test build)
+
+# An unofficial build of SideStore 0.6.4 (the current stable release) with one
+# small change: when an app declares the HealthKit permission, it asks Apple
+# to switch HealthKit on for that app. Stock SideStore never asks, so the
+# signing profile Apple returns has no HealthKit in it and the Health
+# permission sheet in HIIT Coach cannot appear.
+#
+# The change is scripts/sidestore-healthkit/healthkit.patch (10 lines); the
+# README next to it explains what was found and how to use the result.
+#
+#  - pull request:  builds it whenever the patch or this file changes, so a
+#                   broken build is caught before merging
+#  - run by hand:   Actions → "SideStore with HealthKit (test build)" →
+#                   Run workflow. Tick "publish" to also get a pre-release
+#                   with a plain download link.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/sidestore-healthkit.yml"
+      - "scripts/sidestore-healthkit/healthkit.patch"
+      - "scripts/sidestore-healthkit/check/**"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Also publish the IPA as a pre-release (a plain download link, no GitHub sign-in needed)"
+        type: boolean
+        default: false
+      runner:
+        description: "Mac runner to build on (advanced)"
+        type: choice
+        options:
+          - macos-26
+          - xcode-27
+        default: macos-26
+      xcode:
+        description: "Xcode version to build with (advanced)"
+        type: string
+        default: "26.4"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sidestore-healthkit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to what the patch was written and checked against. SideStore's
+  # 0.6.4 tag, and the SideSign (signing library) revision that tag uses.
+  SIDESTORE_REPO: SideStore/SideStore
+  SIDESTORE_TAG: "0.6.4"
+  SIDESTORE_SHA: f93a95c079057090bea355453ef24f6e8668dfa9
+  SIDESIGN_SHA: 7f818429fec3c8d7b63871b8bfdf063603cd2115
+  BUNDLE_ID: com.SideStore.SideStore
+
+jobs:
+  build:
+    name: Build SideStore with HealthKit
+    # SideStore built 0.6.4 on macos-26 with Xcode 26.4; the same here.
+    runs-on: ${{ inputs.runner || 'macos-26' }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v7
+
+      - name: Check out SideStore ${{ env.SIDESTORE_TAG }}
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.SIDESTORE_REPO }}
+          ref: ${{ env.SIDESTORE_SHA }}
+          path: sidestore
+          submodules: recursive
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check these are the versions the patch was written for
+        run: |
+          test "$(git -C sidestore rev-parse HEAD)" = "$SIDESTORE_SHA"
+          test "$(git -C sidestore/Dependencies/SideSign rev-parse HEAD)" = "$SIDESIGN_SHA"
+          echo "SideStore $SIDESTORE_TAG ($SIDESTORE_SHA)"
+          echo "SideSign $SIDESIGN_SHA"
+
+      - name: Apply the HealthKit patch
+        run: |
+          cd sidestore/Dependencies/SideSign
+          git apply --check "$GITHUB_WORKSPACE/scripts/sidestore-healthkit/healthkit.patch"
+          git apply --verbose "$GITHUB_WORKSPACE/scripts/sidestore-healthkit/healthkit.patch"
+          git --no-pager diff --stat
+
+      # Compiles SideSign's own capability code with the patch and checks
+      # what it asks Apple for — in seconds, before the long build.
+      - name: Check the patched capability list
+        run: |
+          SIGN=sidestore/Dependencies/SideSign/Sources/Models
+          swiftc -swift-version 5 -o check-healthkit \
+            "$SIGN/Feature.swift" "$SIGN/Entitlement.swift" "$SIGN/Team.swift" "$SIGN/Account.swift" \
+            scripts/sidestore-healthkit/check/main.swift
+          ./check-healthkit
+
+      - name: Select Xcode
+        env:
+          WANT: ${{ inputs.xcode || '26.4' }}
+        run: |
+          DIR=$(ls -d "/Applications/Xcode_${WANT}.app" "/Applications/Xcode_${WANT}"*.app 2>/dev/null | head -n 1 || true)
+          if [ -n "$DIR" ]; then
+            sudo xcode-select -s "$DIR/Contents/Developer"
+          else
+            echo "::warning::Xcode $WANT isn't installed on this runner; using the default. Installed:"
+            ls -d /Applications/Xcode*.app || true
+          fi
+          xcodebuild -version
+
+      - name: Install the tools SideStore's build needs
+        run: brew install ldid xcbeautify
+
+      # The same three steps SideStore's own release workflow runs: archive
+      # without signing, fake-sign to keep the entitlements, zip into an IPA.
+      - name: Build (Release, unsigned)
+        working-directory: sidestore
+        run: |
+          set -o pipefail
+          mkdir -p build/logs
+          NSUnbufferedIO=YES make -B build 2>&1 | tee -a build/logs/build.log | xcbeautify --renderer github-actions
+          make fakesign 2>&1 | tee -a build/logs/build.log
+          make ipa 2>&1 | tee -a build/logs/build.log
+          ls -la SideStore.ipa
+
+      - name: Show compiler errors
+        if: failure()
+        working-directory: sidestore
+        run: |
+          if [ -f build/logs/build.log ]; then
+            echo "Errors from the build log:"
+            grep -E "(error|fatal error):" build/logs/build.log | sort -u | head -n 150 || true
+          fi
+
+      # The IPA replaces the installed SideStore in place, which only works
+      # if it has the same app ID.
+      - name: Check the IPA
+        working-directory: sidestore
+        run: |
+          rm -rf ipa-check && mkdir ipa-check && unzip -q SideStore.ipa -d ipa-check
+          APP=ipa-check/Payload/SideStore.app
+          ID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP/Info.plist")
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Info.plist")
+          echo "Bundle ID: $ID"
+          echo "Version:   $VERSION"
+          test "$ID" = "$BUNDLE_ID"
+          if [ "$VERSION" != "$SIDESTORE_TAG" ]; then
+            echo "::warning::The IPA says version $VERSION, not $SIDESTORE_TAG."
+          fi
+
+      - name: Describe the build
+        run: |
+          mkdir out
+          cp sidestore/SideStore.ipa "out/SideStore-${SIDESTORE_TAG}-HealthKit.ipa"
+          {
+            echo "Unofficial SideStore build with HealthKit — not made or endorsed by the SideStore team."
+            echo
+            echo "SideStore:  $SIDESTORE_REPO $SIDESTORE_TAG ($SIDESTORE_SHA)"
+            echo "SideSign:   SideStore/SideSign $SIDESIGN_SHA"
+            echo "Patch:      scripts/sidestore-healthkit/healthkit.patch (sha256 $(shasum -a 256 scripts/sidestore-healthkit/healthkit.patch | cut -d' ' -f1))"
+            echo "Built from: $GITHUB_REPOSITORY $GITHUB_SHA"
+            echo "Run:        $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "Runner:     ${{ inputs.runner || 'macos-26' }}, $(xcodebuild -version | tr '\n' ' ')"
+            echo "Built on:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "IPA:        $(stat -f%z "out/SideStore-${SIDESTORE_TAG}-HealthKit.ipa") bytes, sha256 $(shasum -a 256 "out/SideStore-${SIDESTORE_TAG}-HealthKit.ipa" | cut -d' ' -f1)"
+            echo
+            echo "SideStore is licensed under the GNU AGPL-3.0. The source of this build is the"
+            echo "SideStore and SideSign revisions above plus the patch named above."
+          } > out/BUILD-INFO.txt
+          cat out/BUILD-INFO.txt
+
+      - name: Upload the IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: SideStore-HealthKit
+          path: |
+            out/SideStore-${{ env.SIDESTORE_TAG }}-HealthKit.ipa
+            out/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  # Optional: attach the IPA to a pre-release so it can be downloaded with a
+  # plain link (an Actions artifact needs a GitHub sign-in and unzipping).
+  # Pre-releases are ignored by HIIT Coach's own install feed.
+  publish:
+    name: Publish pre-release
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download the build
+        uses: actions/download-artifact@v8
+        with:
+          name: SideStore-HealthKit
+          path: out
+
+      - name: Write the release notes
+        run: |
+          BASE="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/scripts/sidestore-healthkit"
+          cat > notes.md <<EOF
+          **Unofficial test build — not made or endorsed by the SideStore team.**
+
+          SideStore $SIDESTORE_TAG (the current stable release) with one change: when an app declares the HealthKit permission, it now asks Apple to switch HealthKit on for that app. Stock SideStore never does, so Apple's signing profile has no HealthKit in it and apps that need Apple Health (HIIT Coach does) can't show the Health permission sheet. The whole change is [10 lines]($BASE/healthkit.patch).
+
+          **Only use this if** your SideStore is version $SIDESTORE_TAG (SideStore → Settings), and you could reinstall SideStore from a computer if something went wrong.
+
+          **Install:** download the \`.ipa\` below. In SideStore: My Apps → **+** → pick the file. It has the same app ID as SideStore, so it replaces the one you have. Then open **HIIT Coach** in My Apps and tap its expiry/refresh — that is when SideStore asks Apple for HealthKit.
+
+          **Not yet proven on a phone.** The build compiles and its capability list is checked automatically; Apple's side only gets exercised when you refresh an app with it. [Details]($BASE/README.md)
+
+          SideStore is licensed under the GNU AGPL-3.0. Source of this build: SideStore $SIDESTORE_TAG (\`$SIDESTORE_SHA\`) and SideSign (\`$SIDESIGN_SHA\`), plus the patch linked above.
+          EOF
+          cat notes.md
+
+      - name: Create the pre-release
+        run: |
+          TAG="sidestore-healthkit-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" out/*.ipa out/BUILD-INFO.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "SideStore $SIDESTORE_TAG + HealthKit (unofficial test build)" \
+            --notes-file notes.md \
+            --prerelease \
+            --latest=false
+          echo "Published: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
