@@ -23,6 +23,17 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "1.0.32",
+          "buildVersion": "38",
+          "buildNumber": "38",
+          "date": "2026-11-17T00:10:18Z",
+          "localizedDescription": "Follow-up: README for the Duo build and install source, working simulator screenshots (#15)",
+          "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.32/HIIT-unsigned.ipa",
+          "size": 1449792,
+          "sha256": "e069f068da02a211a5dabcdb17e36b4c039f9da0f17a784ad9458116b0c57cd1",
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "1.0.31",
           "buildVersion": "33",
           "buildNumber": "33",
@@ -44,11 +55,11 @@
           "NSHealthUpdateUsageDescription": "HIIT Coach saves your finished interval workouts (duration, estimated calories, and distance) to Apple Health."
         }
       },
-      "version": "1.0.31",
-      "versionDate": "2026-11-16T18:45:50Z",
-      "versionDescription": "WIP: adaptive layout engine, coach model resilience, release tooling (#14)",
-      "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.31/HIIT-unsigned.ipa",
-      "size": 1450772
+      "version": "1.0.32",
+      "versionDate": "2026-11-17T00:10:18Z",
+      "versionDescription": "Follow-up: README for the Duo build and install source, working simulator screenshots (#15)",
+      "downloadURL": "https://github.com/scootsy/HIIT/releases/download/v1.0.32/HIIT-unsigned.ipa",
+      "size": 1449792
     }
   ],
   "news": []
